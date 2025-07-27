@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
+import 'package:okdriver/dashcam/services/background_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:image_gallery_saver/image_gallery_saver.dart';
@@ -55,18 +56,69 @@ class _DashcamScreenState extends State<DashcamScreen>
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Handle app lifecycle changes (background/foreground)
-    if (!_cameraController.value.isInitialized) return;
+  void didChangeAppLifecycleState(AppLifecycleState state) async {
+    if (!_cameraController.value.isInitialized) {
+      return;
+    }
 
-    if (state == AppLifecycleState.inactive) {
-      // App going to background
-      // In a real implementation, we would start a background service here
-      // to continue recording if _isRecording is true
-      _cameraController.dispose();
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      // App is going to background
+      print('App going to background, current recording state: $_isRecording');
+
+      // If recording, ensure the background service is running
+      if (_isRecording) {
+        print('Transferring recording to background service');
+        // Initialize background service with current camera settings
+        await DashcamBackgroundService().initialize(
+          cameraController: _cameraController,
+          maxRecordingDurationMinutes: _getDurationInMinutes(),
+        );
+
+        // Start background recording
+        await DashcamBackgroundService().startBackgroundRecording();
+
+        // We don't stop the current recording as the background service will handle it
+      } else {
+        // Dispose of the controller when the app is in the background if not recording
+        _cameraController.dispose();
+        _isInitialized = false;
+      }
     } else if (state == AppLifecycleState.resumed) {
-      // App coming to foreground
-      _initializeCamera();
+      print('App resumed from background');
+
+      // Reinitialize the camera if needed
+      if (!_cameraController.value.isInitialized) {
+        await _initializeCamera();
+      }
+
+      // Check if background service was recording
+      if (DashcamBackgroundService().isRecording) {
+        print('Background service was recording, syncing state');
+
+        // Update UI state to match background service
+        setState(() {
+          _isRecording = true;
+          _elapsedSeconds = DashcamBackgroundService().elapsedSeconds;
+          final minutes = (_elapsedSeconds ~/ 60).toString().padLeft(2, '0');
+          final seconds = (_elapsedSeconds % 60).toString().padLeft(2, '0');
+          _recordingDuration = '$minutes:$seconds';
+        });
+
+        // Continue recording in foreground
+        await DashcamBackgroundService().stopBackgroundRecording();
+
+        // We don't need to start recording again as it's already running
+      } else if (_isRecording) {
+        // Our state thinks we're recording but background service isn't
+        // This could happen if the background service stopped recording due to error or time limit
+        setState(() {
+          _isRecording = false;
+          _isPaused = false;
+          _elapsedSeconds = 0;
+          _recordingDuration = '00:00';
+        });
+      }
     }
   }
 
@@ -134,8 +186,16 @@ class _DashcamScreenState extends State<DashcamScreen>
     final path = '${directory.path}/dashcam_$timestamp.mp4';
 
     try {
+      // Initialize background service with current camera settings
+      await DashcamBackgroundService().initialize(
+        cameraController: _cameraController,
+        maxRecordingDurationMinutes: _getDurationInMinutes(),
+      );
+
+      // Start recording with camera controller
       await _cameraController.startVideoRecording();
       _currentVideoPath = path;
+
       setState(() {
         _isRecording = true;
         _isPaused = false;
@@ -147,6 +207,8 @@ class _DashcamScreenState extends State<DashcamScreen>
 
       // Set up automatic stop based on selected duration
       _setupAutomaticStop();
+
+      print('Started recording in foreground mode');
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error starting recording: $e')),
@@ -154,24 +216,71 @@ class _DashcamScreenState extends State<DashcamScreen>
     }
   }
 
+  // Helper method to convert selected duration string to minutes
+  int _getDurationInMinutes() {
+    switch (_selectedDuration) {
+      case '15m':
+        return 15;
+      case '30m':
+        return 30;
+      case '1h':
+        return 60;
+      default:
+        return 15; // Default to 15 minutes
+    }
+  }
+
   Future<void> _stopRecording() async {
-    if (!_cameraController.value.isRecordingVideo) return;
+    // Check if we're recording in foreground or background
+    bool isRecordingInForeground = _cameraController.value.isInitialized &&
+        _cameraController.value.isRecordingVideo;
+    bool isRecordingInBackground = DashcamBackgroundService().isRecording;
+
+    print(
+        'Stopping recording - Foreground: $isRecordingInForeground, Background: $isRecordingInBackground');
 
     _stopRecordingTimer();
 
     try {
-      final videoFile = await _cameraController.stopVideoRecording();
+      XFile? videoFile;
+
+      // Stop foreground recording if active
+      if (isRecordingInForeground) {
+        videoFile = await _cameraController.stopVideoRecording();
+        print('Stopped foreground recording: ${videoFile.path}');
+      }
+
+      // Stop background recording if active
+      if (isRecordingInBackground) {
+        await DashcamBackgroundService().stopBackgroundRecording();
+        print('Stopped background recording');
+
+        // If we have a video path from background service, use it
+        String? backgroundVideoPath =
+            DashcamBackgroundService().currentVideoPath;
+        if (backgroundVideoPath != null && videoFile == null) {
+          videoFile = XFile(backgroundVideoPath);
+        }
+      }
+
       setState(() {
         _isRecording = false;
         _isPaused = false;
+        _elapsedSeconds = 0;
+        _recordingDuration = '00:00';
       });
 
-      // Save the video file
-      await _saveVideoFile(videoFile);
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Video saved successfully')),
-      );
+      // Save the video file if we have one
+      if (videoFile != null) {
+        await _saveVideoFile(videoFile);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Video saved successfully')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No video file was created')),
+        );
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error stopping recording: $e')),
@@ -315,8 +424,23 @@ class _DashcamScreenState extends State<DashcamScreen>
   }
 
   void _deleteCurrentRecording() async {
+    // If recording is in progress, stop it first
     if (_isRecording) {
-      await _stopRecording();
+      _stopRecordingTimer();
+      try {
+        await _cameraController.stopVideoRecording();
+        setState(() {
+          _isRecording = false;
+          _isPaused = false;
+        });
+        DashcamBackgroundService().stopBackgroundRecording();
+      } catch (e) {
+        // Handle error
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error stopping recording: $e')),
+        );
+        return;
+      }
     }
 
     // Delete the current video file if it exists
@@ -325,6 +449,7 @@ class _DashcamScreenState extends State<DashcamScreen>
         final file = File(_currentVideoPath!);
         if (await file.exists()) {
           await file.delete();
+          _currentVideoPath = null;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Recording deleted')),
           );
@@ -334,6 +459,10 @@ class _DashcamScreenState extends State<DashcamScreen>
           SnackBar(content: Text('Error deleting recording: $e')),
         );
       }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No recording to delete')),
+      );
     }
   }
 
@@ -479,6 +608,7 @@ class _DashcamScreenState extends State<DashcamScreen>
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
+                // Record/Stop button
                 IconButton(
                   icon: Icon(
                     _isRecording ? Icons.stop : Icons.fiber_manual_record,
@@ -488,6 +618,7 @@ class _DashcamScreenState extends State<DashcamScreen>
                   onPressed: _toggleRecording,
                   tooltip: _isRecording ? 'Stop Recording' : 'Start Recording',
                 ),
+                // Pause/Resume button (only shown when recording)
                 if (_isRecording)
                   IconButton(
                     icon: Icon(
@@ -497,13 +628,36 @@ class _DashcamScreenState extends State<DashcamScreen>
                     onPressed: _pauseResumeRecording,
                     tooltip: _isPaused ? 'Resume Recording' : 'Pause Recording',
                   ),
-                IconButton(
-                  icon: const Icon(
-                    Icons.delete,
-                    size: 36,
+                // Save button
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.save),
+                  label: const Text('Save'),
+                  onPressed: _isRecording
+                      ? () async {
+                          final videoFile =
+                              await _cameraController.stopVideoRecording();
+                          setState(() {
+                            _isRecording = false;
+                            _isPaused = false;
+                          });
+                          _stopRecordingTimer();
+                          await _saveVideoFile(videoFile);
+                        }
+                      : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
                   ),
+                ),
+                // Delete button
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.delete),
+                  label: const Text('Delete'),
                   onPressed: _deleteCurrentRecording,
-                  tooltip: 'Delete Recording',
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                  ),
                 ),
               ],
             ),
