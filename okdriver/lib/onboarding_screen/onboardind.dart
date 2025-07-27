@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:okdriver/dashcam/components/camera_selection.dart';
 import 'package:okdriver/driver_auth_screen/send_otp.dart';
 import 'package:okdriver/theme/theme_provider.dart';
 import 'package:provider/provider.dart';
@@ -202,7 +203,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       context,
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) =>
-            SendOtpScreen(),
+            CameraSelectionScreen(),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return SlideTransition(
             position: animation.drive(

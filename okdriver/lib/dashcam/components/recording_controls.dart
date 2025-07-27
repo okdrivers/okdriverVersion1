@@ -1,334 +1,192 @@
 import 'package:flutter/material.dart';
-import 'package:okdriver/driver_profile_screen/components/subscription_plan.dart';
 
-class RecordingControlsScreen extends StatefulWidget {
-  final Function(bool) onAudioToggle;
-  final Function(int) onDurationChange;
-  final Function(String) onStorageLocationChange;
-  final Function() onStartRecording;
-  final Function() onPauseRecording;
-  final Function() onStopRecording;
-  final Function() onDeleteRecording;
+class RecordingControls extends StatelessWidget {
   final bool isRecording;
   final bool isPaused;
+  final VoidCallback onRecordPressed;
+  final VoidCallback onPauseResumePressed;
+  final VoidCallback onDeletePressed;
 
-  const RecordingControlsScreen({
+  const RecordingControls({
     Key? key,
-    required this.onAudioToggle,
-    required this.onDurationChange,
-    required this.onStorageLocationChange,
-    required this.onStartRecording,
-    required this.onPauseRecording,
-    required this.onStopRecording,
-    required this.onDeleteRecording,
     required this.isRecording,
     required this.isPaused,
+    required this.onRecordPressed,
+    required this.onPauseResumePressed,
+    required this.onDeletePressed,
   }) : super(key: key);
 
   @override
-  State<RecordingControlsScreen> createState() =>
-      _RecordingControlsScreenState();
-}
-
-class _RecordingControlsScreenState extends State<RecordingControlsScreen> {
-  bool _recordWithAudio = true;
-  String _storageLocation = 'local'; // 'local' or 'cloud'
-  int _recordingDuration = 15; // in minutes
-  final List<int> _availableDurations = [15, 30, 60]; // in minutes
-
-  @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildStorageSelector(),
-        if (_storageLocation == 'local') _buildDurationSelector(),
-        _buildAudioToggle(),
-        const SizedBox(height: 20),
-        _buildRecordingControls(),
-      ],
-    );
-  }
-
-  Widget _buildStorageSelector() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.only(left: 16, top: 16, bottom: 8),
-          child: Text(
-            'Storage Location',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
-        ),
-        Row(
-          children: [
-            Expanded(
-              child: _buildStorageOption(
-                'Local Storage',
-                'local',
-                Icons.phone_android,
-              ),
-            ),
-            Expanded(
-              child: _buildStorageOption(
-                'Cloud Storage',
-                'cloud',
-                Icons.cloud_upload,
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildStorageOption(String title, String value, IconData icon) {
-    final isSelected = _storageLocation == value;
-
-    return InkWell(
-      onTap: () {
-        setState(() {
-          _storageLocation = value;
-        });
-        widget.onStorageLocationChange(value);
-
-        // If cloud storage is selected, navigate to subscription plan
-        if (value == 'cloud') {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const BuyPlanScreen()),
-          );
-        }
-      },
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? Theme.of(context).primaryColor.withOpacity(0.1)
-              : Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected
-                ? Theme.of(context).primaryColor
-                : Colors.grey.shade300,
-            width: isSelected ? 2 : 1,
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              color: isSelected
-                  ? Theme.of(context).primaryColor
-                  : Colors.grey.shade600,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              title,
-              style: TextStyle(
-                color: isSelected
-                    ? Theme.of(context).primaryColor
-                    : Colors.grey.shade800,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDurationSelector() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.only(left: 16, top: 16, bottom: 8),
-          child: Text(
-            'Recording Duration',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
-        ),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: Row(
-            children: _availableDurations.map((duration) {
-              return _buildDurationOption(duration);
-            }).toList(),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDurationOption(int duration) {
-    final isSelected = _recordingDuration == duration;
-    String durationText = duration == 60 ? '1 hour' : '$duration min';
-
-    return InkWell(
-      onTap: () {
-        setState(() {
-          _recordingDuration = duration;
-        });
-        widget.onDurationChange(duration);
-      },
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? Theme.of(context).primaryColor.withOpacity(0.1)
-              : Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected
-                ? Theme.of(context).primaryColor
-                : Colors.grey.shade300,
-            width: isSelected ? 2 : 1,
-          ),
-        ),
-        child: Text(
-          durationText,
-          style: TextStyle(
-            color: isSelected
-                ? Theme.of(context).primaryColor
-                : Colors.grey.shade800,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAudioToggle() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        children: [
-          const Text(
-            'Record with Audio',
-            style: TextStyle(fontSize: 16),
-          ),
-          const Spacer(),
-          Switch(
-            value: _recordWithAudio,
-            onChanged: (value) {
-              setState(() {
-                _recordWithAudio = value;
-              });
-              widget.onAudioToggle(value);
-            },
-            activeColor: Theme.of(context).primaryColor,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRecordingControls() {
     return Container(
-      padding: const EdgeInsets.all(16),
-      child: Column(
+      padding: const EdgeInsets.all(16.0),
+      color: Colors.grey[200],
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _buildControlButton(
-                icon: widget.isRecording
-                    ? (widget.isPaused ? Icons.play_arrow : Icons.pause)
-                    : Icons.fiber_manual_record,
-                label: widget.isRecording
-                    ? (widget.isPaused ? 'Resume' : 'Pause')
-                    : 'Record',
-                color: widget.isRecording && !widget.isPaused
-                    ? Colors.amber
-                    : Colors.red,
-                onPressed: () {
-                  if (!widget.isRecording) {
-                    widget.onStartRecording();
-                  } else if (widget.isPaused) {
-                    widget.onStartRecording(); // Resume recording
-                  } else {
-                    widget.onPauseRecording();
-                  }
-                },
-              ),
-              if (widget.isRecording)
-                _buildControlButton(
-                  icon: Icons.stop,
-                  label: 'Stop',
-                  color: Colors.blue,
-                  onPressed: widget.onStopRecording,
-                ),
-              if (widget.isRecording)
-                _buildControlButton(
-                  icon: Icons.delete,
-                  label: 'Delete',
-                  color: Colors.grey,
-                  onPressed: widget.onDeleteRecording,
-                ),
-            ],
-          ),
-          if (widget.isRecording) const SizedBox(height: 16),
-          if (widget.isRecording)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.circle,
-                    color: widget.isPaused ? Colors.grey : Colors.red,
-                    size: 12,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    widget.isPaused
-                        ? 'Recording Paused'
-                        : 'Recording in Progress',
-                    style: TextStyle(
-                      color: widget.isPaused ? Colors.grey : Colors.red,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
+          // Record/Stop button
+          _buildControlButton(
+            icon: Icon(
+              isRecording ? Icons.stop : Icons.fiber_manual_record,
+              color: isRecording ? Colors.black : Colors.red,
+              size: 36,
             ),
+            onPressed: onRecordPressed,
+            tooltip: isRecording ? 'Stop Recording' : 'Start Recording',
+          ),
+
+          // Pause/Resume button (only shown when recording)
+          if (isRecording)
+            _buildControlButton(
+              icon: Icon(
+                isPaused ? Icons.play_arrow : Icons.pause,
+                size: 36,
+              ),
+              onPressed: onPauseResumePressed,
+              tooltip: isPaused ? 'Resume Recording' : 'Pause Recording',
+            ),
+
+          // Delete button
+          _buildControlButton(
+            icon: const Icon(
+              Icons.delete,
+              size: 36,
+            ),
+            onPressed: onDeletePressed,
+            tooltip: 'Delete Recording',
+          ),
         ],
       ),
     );
   }
 
   Widget _buildControlButton({
-    required IconData icon,
-    required String label,
-    required Color color,
+    required Icon icon,
     required VoidCallback onPressed,
+    required String tooltip,
   }) {
+    return IconButton(
+      icon: icon,
+      onPressed: onPressed,
+      tooltip: tooltip,
+    );
+  }
+}
+
+class RecordingOptions extends StatelessWidget {
+  final String selectedDuration;
+  final String storageOption;
+  final Function(String) onDurationChanged;
+  final Function(String) onStorageOptionChanged;
+
+  const RecordingOptions({
+    Key? key,
+    required this.selectedDuration,
+    required this.storageOption,
+    required this.onDurationChanged,
+    required this.onStorageOptionChanged,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Duration selection
+          const Text(
+            'Recording Duration:',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _buildDurationOption('15m', '15 min'),
+              _buildDurationOption('30m', '30 min'),
+              _buildDurationOption('1h', '1 hour'),
+            ],
+          ),
+
+          const SizedBox(height: 24),
+
+          // Storage option
+          const Text(
+            'Storage Option:',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _buildStorageOption('local', 'Local Storage'),
+              _buildStorageOption('cloud', 'Cloud Storage'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDurationOption(String value, String label) {
+    final isSelected = selectedDuration == value;
+    return ChoiceChip(
+      label: Text(label),
+      selected: isSelected,
+      onSelected: (selected) {
+        if (selected) {
+          onDurationChanged(value);
+        }
+      },
+    );
+  }
+
+  Widget _buildStorageOption(String value, String label) {
+    final isSelected = storageOption == value;
+    return ChoiceChip(
+      label: Text(label),
+      selected: isSelected,
+      onSelected: (selected) {
+        if (selected) {
+          onStorageOptionChanged(value);
+        }
+      },
+    );
+  }
+}
+
+class RecordingProgressBar extends StatelessWidget {
+  final double progress;
+  final String duration;
+
+  const RecordingProgressBar({
+    Key? key,
+    required this.progress,
+    required this.duration,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        ElevatedButton(
-          onPressed: onPressed,
-          style: ElevatedButton.styleFrom(
-            shape: const CircleBorder(),
-            padding: const EdgeInsets.all(16),
-            backgroundColor: color,
-          ),
-          child: Icon(
-            icon,
-            color: Colors.white,
-            size: 32,
-          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              'Recording Progress:',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            Text(duration),
+          ],
         ),
         const SizedBox(height: 8),
-        Text(label),
+        LinearProgressIndicator(
+          value: progress,
+          backgroundColor: Colors.grey[300],
+          valueColor: const AlwaysStoppedAnimation<Color>(Colors.red),
+        ),
       ],
     );
   }

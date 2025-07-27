@@ -1,17 +1,25 @@
 import 'dart:async';
 import 'dart:io';
-
 import 'package:flutter/material.dart';
+import 'package:camera/camera.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:image_gallery_saver/image_gallery_saver.dart';
 import 'package:okdriver/dashcam/components/camera_selection.dart';
 import 'package:okdriver/dashcam/components/recording_controls.dart';
 import 'package:okdriver/dashcam/components/video_preview.dart';
-import 'package:okdriver/theme/theme_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:provider/provider.dart';
-import 'package:video_player/video_player.dart';
 
 class DashcamScreen extends StatefulWidget {
-  const DashcamScreen({Key? key}) : super(key: key);
+  final CameraType cameraType;
+  final CameraDescription? frontCamera;
+  final CameraDescription? backCamera;
+
+  const DashcamScreen({
+    Key? key,
+    required this.cameraType,
+    this.frontCamera,
+    this.backCamera,
+  }) : super(key: key);
 
   @override
   State<DashcamScreen> createState() => _DashcamScreenState();
@@ -19,303 +27,535 @@ class DashcamScreen extends StatefulWidget {
 
 class _DashcamScreenState extends State<DashcamScreen>
     with WidgetsBindingObserver {
-  bool _isDarkMode = false;
-  String _selectedCamera = ''; // 'front', 'back', or 'dual'
+  late CameraController _cameraController;
+  bool _isInitialized = false;
   bool _isRecording = false;
   bool _isPaused = false;
-  bool _recordWithAudio = true;
-  int _recordingDuration = 15; // in minutes
-  String _storageLocation = 'local'; // 'local' or 'cloud'
-  String? _currentVideoPath;
-  List<String> _savedVideos = [];
+  bool _isAudioEnabled = true;
+  String _recordingDuration = '00:00';
+  String _selectedDuration = '15m'; // Default 15 minutes
+  String _storageOption = 'local'; // Default local storage
   Timer? _recordingTimer;
-  DateTime? _recordingStartTime;
-
-  // Controllers for video preview
-  VideoPlayerController? _livePreviewController;
-  VideoPlayerController? _savedVideoController;
-  bool _isPlayingSavedVideo = false;
+  int _elapsedSeconds = 0;
+  String? _currentVideoPath;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _loadTheme();
-    _checkPermissions();
-    _loadSavedVideos();
-  }
-
-  void _loadTheme() {
-    final themeProvider = Provider.of<ThemeProvider>(context, listen: false);
-    setState(() {
-      // _isDarkMode = themeProvider.isDarkMode;
-    });
-  }
-
-  Future<void> _checkPermissions() async {
-    final cameraStatus = await Permission.camera.status;
-    final microphoneStatus = await Permission.microphone.status;
-    final storageStatus = await Permission.storage.status;
-
-    if (!cameraStatus.isGranted ||
-        !microphoneStatus.isGranted ||
-        !storageStatus.isGranted) {
-      // Permissions will be requested in the CameraSelectionScreen
-    }
-  }
-
-  Future<void> _loadSavedVideos() async {
-    // In a real app, you would load the list of saved videos from storage
-    // For this example, we'll just use a placeholder
-    setState(() {
-      _savedVideos = [];
-    });
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _loadTheme();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Handle app lifecycle changes to ensure recording continues in background
-    if (state == AppLifecycleState.paused) {
-      // App is in background
-      if (_isRecording && !_isPaused) {
-        // Continue recording in background
-      }
-    } else if (state == AppLifecycleState.resumed) {
-      // App is in foreground again
-      _checkPermissions();
-    }
-  }
-
-  void _onCameraSelected(String camera) {
-    setState(() {
-      _selectedCamera = camera;
-    });
-    _initializeCameraPreview();
-  }
-
-  void _initializeCameraPreview() {
-    // In a real app, you would initialize the camera preview here
-    // For this example, we'll just use a placeholder
-    _livePreviewController?.dispose();
-    _livePreviewController = null;
-
-    // This would be replaced with actual camera initialization code
-    setState(() {
-      // Placeholder for camera initialization
-    });
-  }
-
-  void _onAudioToggle(bool value) {
-    setState(() {
-      _recordWithAudio = value;
-    });
-  }
-
-  void _onDurationChange(int duration) {
-    setState(() {
-      _recordingDuration = duration;
-    });
-  }
-
-  void _onStorageLocationChange(String location) {
-    setState(() {
-      _storageLocation = location;
-    });
-  }
-
-  void _startRecording() {
-    if (_isRecording && _isPaused) {
-      // Resume recording
-      setState(() {
-        _isPaused = false;
-      });
-    } else if (!_isRecording) {
-      // Start new recording
-      setState(() {
-        _isRecording = true;
-        _isPaused = false;
-        _recordingStartTime = DateTime.now();
-      });
-
-      // Start recording timer
-      _recordingTimer = Timer(Duration(minutes: _recordingDuration), () {
-        _stopRecording();
-      });
-    }
-  }
-
-  void _pauseRecording() {
-    if (_isRecording && !_isPaused) {
-      setState(() {
-        _isPaused = true;
-      });
-
-      // Cancel the current timer
-      _recordingTimer?.cancel();
-    }
-  }
-
-  void _stopRecording() {
-    if (_isRecording) {
-      // Cancel the timer
-      _recordingTimer?.cancel();
-
-      // Generate a filename with timestamp
-      final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-      final videoPath =
-          '/storage/emulated/0/DCIM/OkDriver/dashcam_$timestamp.mp4';
-
-      setState(() {
-        _isRecording = false;
-        _isPaused = false;
-        _currentVideoPath = videoPath;
-        _savedVideos.add(videoPath);
-      });
-
-      // In a real app, you would save the video file here
-      _showRecordingCompleteDialog();
-    }
-  }
-
-  void _deleteRecording() {
-    if (_isRecording) {
-      // Cancel the timer
-      _recordingTimer?.cancel();
-
-      setState(() {
-        _isRecording = false;
-        _isPaused = false;
-        _currentVideoPath = null;
-      });
-
-      // In a real app, you would delete the temporary recording file
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Recording discarded')),
-      );
-    }
-  }
-
-  void _showRecordingCompleteDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Recording Complete'),
-        content: const Text('Your video has been saved successfully.'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-            },
-            child: const Text('OK'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _playSavedVideo(_currentVideoPath!);
-            },
-            child: const Text('View'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _playSavedVideo(String videoPath) {
-    // In a real app, you would play the saved video file
-    // For this example, we'll just use a placeholder
-    _savedVideoController?.dispose();
-
-    // This would be replaced with actual video player initialization
-    // _savedVideoController = VideoPlayerController.file(File(videoPath));
-    // _savedVideoController!.initialize().then((_) {
-    //   _savedVideoController!.play();
-    //   setState(() {
-    //     _isPlayingSavedVideo = true;
-    //   });
-    // });
-
-    setState(() {
-      _isPlayingSavedVideo = true;
-    });
-  }
-
-  void _stopPlayingSavedVideo() {
-    _savedVideoController?.pause();
-    _savedVideoController?.dispose();
-    _savedVideoController = null;
-
-    setState(() {
-      _isPlayingSavedVideo = false;
-    });
+    _initializeCamera();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _recordingTimer?.cancel();
-    _livePreviewController?.dispose();
-    _savedVideoController?.dispose();
+    _stopRecordingTimer();
+    _cameraController.dispose();
     super.dispose();
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Handle app lifecycle changes (background/foreground)
+    if (!_cameraController.value.isInitialized) return;
+
+    if (state == AppLifecycleState.inactive) {
+      // App going to background
+      // In a real implementation, we would start a background service here
+      // to continue recording if _isRecording is true
+      _cameraController.dispose();
+    } else if (state == AppLifecycleState.resumed) {
+      // App coming to foreground
+      _initializeCamera();
+    }
+  }
+
+  Future<void> _initializeCamera() async {
+    // Determine which camera to use based on the selected type
+    CameraDescription cameraToUse;
+
+    switch (widget.cameraType) {
+      case CameraType.front:
+        cameraToUse = widget.frontCamera!;
+        break;
+      case CameraType.back:
+        cameraToUse = widget.backCamera!;
+        break;
+      case CameraType.dual:
+        // For dual mode, we'll use the front camera as primary
+        // In a real implementation, we would handle both cameras
+        cameraToUse = widget.frontCamera ?? widget.backCamera!;
+        break;
+    }
+
+    // Initialize the camera controller
+    _cameraController = CameraController(
+      cameraToUse,
+      ResolutionPreset.high,
+      enableAudio: _isAudioEnabled,
+    );
+
+    try {
+      await _cameraController.initialize();
+      setState(() {
+        _isInitialized = true;
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error initializing camera: $e')),
+      );
+    }
+  }
+
+  Future<void> _toggleRecording() async {
+    if (_isRecording) {
+      await _stopRecording();
+    } else {
+      await _startRecording();
+    }
+  }
+
+  Future<void> _startRecording() async {
+    if (!_cameraController.value.isInitialized) return;
+
+    // Ensure storage permission is granted
+    final storageStatus = await Permission.storage.request();
+    if (!storageStatus.isGranted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Storage permission is required to save videos')),
+      );
+      return;
+    }
+
+    // Create a timestamped file path for the video
+    final directory = await getApplicationDocumentsDirectory();
+    final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
+    final path = '${directory.path}/dashcam_$timestamp.mp4';
+
+    try {
+      await _cameraController.startVideoRecording();
+      _currentVideoPath = path;
+      setState(() {
+        _isRecording = true;
+        _isPaused = false;
+        _elapsedSeconds = 0;
+      });
+
+      // Start the recording timer
+      _startRecordingTimer();
+
+      // Set up automatic stop based on selected duration
+      _setupAutomaticStop();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error starting recording: $e')),
+      );
+    }
+  }
+
+  Future<void> _stopRecording() async {
+    if (!_cameraController.value.isRecordingVideo) return;
+
+    _stopRecordingTimer();
+
+    try {
+      final videoFile = await _cameraController.stopVideoRecording();
+      setState(() {
+        _isRecording = false;
+        _isPaused = false;
+      });
+
+      // Save the video file
+      await _saveVideoFile(videoFile);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video saved successfully')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error stopping recording: $e')),
+      );
+    }
+  }
+
+  Future<void> _pauseResumeRecording() async {
+    if (!_isRecording) return;
+
+    try {
+      if (_isPaused) {
+        await _cameraController.resumeVideoRecording();
+        _startRecordingTimer();
+      } else {
+        await _cameraController.pauseVideoRecording();
+        _stopRecordingTimer();
+      }
+
+      setState(() {
+        _isPaused = !_isPaused;
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error pausing/resuming recording: $e')),
+      );
+    }
+  }
+
+  Future<void> _saveVideoFile(XFile videoFile) async {
+    // In a real implementation, we would handle cloud storage here
+    // based on the _storageOption value
+    if (_storageOption == 'cloud') {
+      // Upload to cloud storage (would require subscription)
+      // For now, we'll just show a message
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cloud storage requires subscription')),
+      );
+    }
+
+    try {
+      // Save to local storage (app documents directory)
+      final directory = await getApplicationDocumentsDirectory();
+      final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
+      final localPath = '${directory.path}/dashcam_$timestamp.mp4';
+
+      // Copy the file to the app's documents directory
+      final sourceFile = File(videoFile.path);
+      await sourceFile.copy(localPath);
+
+      // Save to device gallery
+      final result = await ImageGallerySaver.saveFile(localPath);
+
+      if (result['isSuccess']) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Video saved to gallery successfully')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content:
+                  Text('Failed to save to gallery: ${result['errorMessage']}')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error saving video: $e')),
+      );
+    }
+  }
+
+  void _startRecordingTimer() {
+    _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      setState(() {
+        _elapsedSeconds++;
+        final minutes = (_elapsedSeconds ~/ 60).toString().padLeft(2, '0');
+        final seconds = (_elapsedSeconds % 60).toString().padLeft(2, '0');
+        _recordingDuration = '$minutes:$seconds';
+      });
+    });
+  }
+
+  void _stopRecordingTimer() {
+    _recordingTimer?.cancel();
+    _recordingTimer = null;
+  }
+
+  void _setupAutomaticStop() {
+    // Convert selected duration to seconds
+    int durationInSeconds;
+    switch (_selectedDuration) {
+      case '15m':
+        durationInSeconds = 15 * 60;
+        break;
+      case '30m':
+        durationInSeconds = 30 * 60;
+        break;
+      case '1h':
+        durationInSeconds = 60 * 60;
+        break;
+      default:
+        durationInSeconds = 15 * 60; // Default to 15 minutes
+    }
+
+    // Set up a timer to stop recording after the selected duration
+    Timer(Duration(seconds: durationInSeconds), () {
+      if (_isRecording) {
+        _stopRecording();
+      }
+    });
+  }
+
+  void _toggleAudio() {
+    setState(() {
+      _isAudioEnabled = !_isAudioEnabled;
+    });
+
+    // Reinitialize camera with new audio setting
+    _cameraController.dispose();
+    _initializeCamera();
+  }
+
+  void _setRecordingDuration(String duration) {
+    setState(() {
+      _selectedDuration = duration;
+    });
+  }
+
+  void _setStorageOption(String option) {
+    setState(() {
+      _storageOption = option;
+    });
+
+    // If cloud storage is selected, we would typically navigate to subscription screen
+    if (option == 'cloud') {
+      // For now, just show a message
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cloud storage requires subscription')),
+      );
+    }
+  }
+
+  void _deleteCurrentRecording() async {
+    if (_isRecording) {
+      await _stopRecording();
+    }
+
+    // Delete the current video file if it exists
+    if (_currentVideoPath != null) {
+      try {
+        final file = File(_currentVideoPath!);
+        if (await file.exists()) {
+          await file.delete();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Recording deleted')),
+          );
+        }
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error deleting recording: $e')),
+        );
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (!_isInitialized) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Dashcam'),
         actions: [
-          if (_isPlayingSavedVideo)
-            IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: _stopPlayingSavedVideo,
-            ),
+          IconButton(
+            icon: Icon(_isAudioEnabled ? Icons.mic : Icons.mic_off),
+            onPressed: _toggleAudio,
+            tooltip: 'Toggle Audio',
+          ),
         ],
       ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Video Preview (25% of screen)
-            VideoPreviewScreen(
-              videoPath: _currentVideoPath,
-              isRecording: _isRecording,
-              isPaused: _isPaused,
-              selectedCamera: _selectedCamera,
-              livePreviewController: _livePreviewController,
-              savedVideoController: _savedVideoController,
-              isPlayingSavedVideo: _isPlayingSavedVideo,
+      body: Column(
+        children: [
+          // Camera preview (50% of screen in square shape)
+          Container(
+            width: MediaQuery.of(context).size.width,
+            height: MediaQuery.of(context)
+                .size
+                .width, // Same as width to make it square
+            alignment: Alignment.center,
+            child: AspectRatio(
+              aspectRatio: 1.0, // Square aspect ratio
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8.0),
+                child: CameraPreview(_cameraController),
+              ),
             ),
+          ),
 
-            // Camera Selection or Recording Controls
-            Expanded(
-              child: _isPlayingSavedVideo
-                  ? const Center(child: Text('Playing saved video'))
-                  : _selectedCamera.isEmpty
-                      ? CameraSelectionScreen(
-                          onCameraSelected: _onCameraSelected,
-                        )
-                      : SingleChildScrollView(
-                          child: RecordingControlsScreen(
-                            onAudioToggle: _onAudioToggle,
-                            onDurationChange: _onDurationChange,
-                            onStorageLocationChange: _onStorageLocationChange,
-                            onStartRecording: _startRecording,
-                            onPauseRecording: _pauseRecording,
-                            onStopRecording: _stopRecording,
-                            onDeleteRecording: _deleteRecording,
-                            isRecording: _isRecording,
-                            isPaused: _isPaused,
-                          ),
-                        ),
+          // Recording duration and status
+          Container(
+            padding: const EdgeInsets.all(8.0),
+            color: Colors.black,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      _isRecording
+                          ? _isPaused
+                              ? Icons.pause
+                              : Icons.fiber_manual_record
+                          : Icons.stop,
+                      color: _isRecording && !_isPaused
+                          ? Colors.red
+                          : Colors.white,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _isRecording ? _recordingDuration : 'Ready',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ],
+                ),
+                Text(
+                  'Camera: ${widget.cameraType.toString().split('.').last}',
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+
+          // Recording options
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Duration selection
+                  const Text(
+                    'Recording Duration:',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _buildDurationOption('15m', '15 min'),
+                      _buildDurationOption('30m', '30 min'),
+                      _buildDurationOption('1h', '1 hour'),
+                    ],
+                  ),
+
+                  const SizedBox(height: 24),
+
+                  // Storage option
+                  const Text(
+                    'Storage Option:',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _buildStorageOption('local', 'Local Storage'),
+                      _buildStorageOption('cloud', 'Cloud Storage'),
+                    ],
+                  ),
+
+                  const SizedBox(height: 24),
+
+                  // Recording progress (seekbar)
+                  if (_isRecording)
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Recording Progress:',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 8),
+                        LinearProgressIndicator(
+                          value: _calculateProgressValue(),
+                          backgroundColor: Colors.grey[300],
+                          valueColor:
+                              const AlwaysStoppedAnimation<Color>(Colors.red),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          ),
+
+          // Recording controls
+          Container(
+            padding: const EdgeInsets.all(16.0),
+            color: Colors.grey[200],
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                IconButton(
+                  icon: Icon(
+                    _isRecording ? Icons.stop : Icons.fiber_manual_record,
+                    color: _isRecording ? Colors.black : Colors.red,
+                    size: 36,
+                  ),
+                  onPressed: _toggleRecording,
+                  tooltip: _isRecording ? 'Stop Recording' : 'Start Recording',
+                ),
+                if (_isRecording)
+                  IconButton(
+                    icon: Icon(
+                      _isPaused ? Icons.play_arrow : Icons.pause,
+                      size: 36,
+                    ),
+                    onPressed: _pauseResumeRecording,
+                    tooltip: _isPaused ? 'Resume Recording' : 'Pause Recording',
+                  ),
+                IconButton(
+                  icon: const Icon(
+                    Icons.delete,
+                    size: 36,
+                  ),
+                  onPressed: _deleteCurrentRecording,
+                  tooltip: 'Delete Recording',
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
+  }
+
+  Widget _buildDurationOption(String value, String label) {
+    final isSelected = _selectedDuration == value;
+    return ChoiceChip(
+      label: Text(label),
+      selected: isSelected,
+      onSelected: (selected) {
+        if (selected) {
+          _setRecordingDuration(value);
+        }
+      },
+    );
+  }
+
+  Widget _buildStorageOption(String value, String label) {
+    final isSelected = _storageOption == value;
+    return ChoiceChip(
+      label: Text(label),
+      selected: isSelected,
+      onSelected: (selected) {
+        if (selected) {
+          _setStorageOption(value);
+        }
+      },
+    );
+  }
+
+  double _calculateProgressValue() {
+    // Calculate progress based on elapsed time and selected duration
+    int totalSeconds;
+    switch (_selectedDuration) {
+      case '15m':
+        totalSeconds = 15 * 60;
+        break;
+      case '30m':
+        totalSeconds = 30 * 60;
+        break;
+      case '1h':
+        totalSeconds = 60 * 60;
+        break;
+      default:
+        totalSeconds = 15 * 60;
+    }
+
+    return _elapsedSeconds / totalSeconds;
   }
 }

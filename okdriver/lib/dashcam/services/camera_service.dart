@@ -1,247 +1,266 @@
 import 'dart:async';
 import 'dart:io';
-
-import 'package:flutter/foundation.dart';
+import 'package:camera/camera.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-class CameraService {
-  // Singleton pattern
-  static final CameraService _instance = CameraService._internal();
-  factory CameraService() => _instance;
-  CameraService._internal();
+enum CameraType { front, back, dual }
 
-  // Camera states
-  bool _isCameraInitialized = false;
+class CameraService {
+  CameraController? _cameraController;
+  bool _isInitialized = false;
   bool _isRecording = false;
   bool _isPaused = false;
-  String _selectedCamera = ''; // 'front', 'back', or 'dual'
-  bool _recordWithAudio = true;
-  String _storageLocation = 'local'; // 'local' or 'cloud'
-
-  // Recording info
+  bool _isAudioEnabled = true;
   String? _currentVideoPath;
-  DateTime? _recordingStartTime;
   Timer? _recordingTimer;
-  int _recordingDuration = 15; // in minutes
+  int _elapsedSeconds = 0;
 
-  // Saved videos
-  final List<String> _savedVideos = [];
+  // Stream controllers for broadcasting state changes
+  final _recordingStateController =
+      StreamController<RecordingState>.broadcast();
+  Stream<RecordingState> get recordingStateStream =>
+      _recordingStateController.stream;
 
-  // Getters
-  bool get isCameraInitialized => _isCameraInitialized;
+  // Getters for current state
+  bool get isInitialized => _isInitialized;
   bool get isRecording => _isRecording;
   bool get isPaused => _isPaused;
-  String get selectedCamera => _selectedCamera;
-  bool get recordWithAudio => _recordWithAudio;
-  String get storageLocation => _storageLocation;
+  bool get isAudioEnabled => _isAudioEnabled;
+  CameraController? get cameraController => _cameraController;
   String? get currentVideoPath => _currentVideoPath;
-  List<String> get savedVideos => List.unmodifiable(_savedVideos);
-
-  // Check and request permissions
-  Future<bool> checkAndRequestPermissions() async {
-    final cameraPermission = await Permission.camera.request();
-    final microphonePermission = await Permission.microphone.request();
-    final storagePermission = await Permission.storage.request();
-
-    return cameraPermission.isGranted &&
-        microphonePermission.isGranted &&
-        storagePermission.isGranted;
-  }
+  int get elapsedSeconds => _elapsedSeconds;
 
   // Initialize camera
-  Future<bool> initializeCamera(String cameraType) async {
+  Future<void> initializeCamera({
+    required CameraDescription cameraDescription,
+    bool enableAudio = true,
+  }) async {
+    _isAudioEnabled = enableAudio;
+
+    // Dispose of any existing controller
+    await _cameraController?.dispose();
+
+    // Create a new controller
+    _cameraController = CameraController(
+      cameraDescription,
+      ResolutionPreset.high,
+      enableAudio: _isAudioEnabled,
+    );
+
     try {
-      final hasPermissions = await checkAndRequestPermissions();
-      if (!hasPermissions) {
-        return false;
-      }
-
-      // In a real implementation, this would initialize the camera hardware
-      // For this example, we'll just simulate it
-      _selectedCamera = cameraType;
-      _isCameraInitialized = true;
-      return true;
+      // Initialize the controller
+      await _cameraController!.initialize();
+      _isInitialized = true;
+      _notifyStateChange();
     } catch (e) {
-      debugPrint('Error initializing camera: $e');
-      _isCameraInitialized = false;
-      return false;
+      _isInitialized = false;
+      _notifyStateChange();
+      rethrow;
     }
-  }
-
-  // Set recording options
-  void setRecordingOptions({
-    bool? withAudio,
-    int? duration,
-    String? storage,
-  }) {
-    if (withAudio != null) _recordWithAudio = withAudio;
-    if (duration != null) _recordingDuration = duration;
-    if (storage != null) _storageLocation = storage;
   }
 
   // Start recording
-  Future<bool> startRecording() async {
-    if (!_isCameraInitialized) return false;
+  Future<void> startRecording() async {
+    if (!_isInitialized || _cameraController == null) {
+      throw Exception('Camera not initialized');
+    }
+
+    if (_isRecording) {
+      return;
+    }
+
+    // Ensure storage permission is granted
+    final storageStatus = await Permission.storage.request();
+    if (!storageStatus.isGranted) {
+      throw Exception('Storage permission is required to save videos');
+    }
+
+    // Create a timestamped file path for the video
+    final directory = await getApplicationDocumentsDirectory();
+    final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
+    final path = '${directory.path}/dashcam_$timestamp.mp4';
+    _currentVideoPath = path;
 
     try {
-      if (_isRecording && _isPaused) {
-        // Resume recording
-        _isPaused = false;
-        return true;
-      }
-
-      if (_isRecording) return true; // Already recording
-
-      // In a real implementation, this would start the camera recording
-      // For this example, we'll just simulate it
+      await _cameraController!.startVideoRecording();
       _isRecording = true;
       _isPaused = false;
-      _recordingStartTime = DateTime.now();
-
-      // Start recording timer
-      _recordingTimer = Timer(Duration(minutes: _recordingDuration), () {
-        stopRecording();
-      });
-
-      return true;
+      _elapsedSeconds = 0;
+      _startRecordingTimer();
+      _notifyStateChange();
     } catch (e) {
-      debugPrint('Error starting recording: $e');
-      return false;
-    }
-  }
-
-  // Pause recording
-  Future<bool> pauseRecording() async {
-    if (!_isRecording || _isPaused) return false;
-
-    try {
-      // In a real implementation, this would pause the camera recording
-      // For this example, we'll just simulate it
-      _isPaused = true;
-
-      // Cancel the current timer
-      _recordingTimer?.cancel();
-
-      return true;
-    } catch (e) {
-      debugPrint('Error pausing recording: $e');
-      return false;
+      _isRecording = false;
+      _currentVideoPath = null;
+      _notifyStateChange();
+      rethrow;
     }
   }
 
   // Stop recording
   Future<String?> stopRecording() async {
-    if (!_isRecording) return null;
+    if (!_isRecording || _cameraController == null) {
+      return null;
+    }
+
+    _stopRecordingTimer();
 
     try {
-      // Cancel the timer
-      _recordingTimer?.cancel();
-
-      // In a real implementation, this would stop the camera recording and save the file
-      // For this example, we'll just simulate it
-      final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-      final videoFileName = 'dashcam_$timestamp.mp4';
-
-      // Get the appropriate directory for saving videos
-      final directory = await _getVideoDirectory();
-      final videoPath = '${directory.path}/$videoFileName';
-
+      final videoFile = await _cameraController!.stopVideoRecording();
       _isRecording = false;
       _isPaused = false;
-      _currentVideoPath = videoPath;
-      _savedVideos.add(videoPath);
-
-      return videoPath;
+      final savedPath = videoFile.path;
+      _notifyStateChange();
+      return savedPath;
     } catch (e) {
-      debugPrint('Error stopping recording: $e');
-      return null;
+      _notifyStateChange();
+      rethrow;
     }
   }
 
-  // Delete current recording
-  Future<bool> deleteRecording() async {
-    if (!_isRecording) return false;
+  // Pause recording
+  Future<void> pauseRecording() async {
+    if (!_isRecording || _isPaused || _cameraController == null) {
+      return;
+    }
 
     try {
-      // Cancel the timer
-      _recordingTimer?.cancel();
-
-      // In a real implementation, this would delete the temporary recording file
-      // For this example, we'll just simulate it
-      _isRecording = false;
-      _isPaused = false;
-      _currentVideoPath = null;
-
-      return true;
+      await _cameraController!.pauseVideoRecording();
+      _isPaused = true;
+      _stopRecordingTimer();
+      _notifyStateChange();
     } catch (e) {
-      debugPrint('Error deleting recording: $e');
-      return false;
+      _notifyStateChange();
+      rethrow;
+    }
+  }
+
+  // Resume recording
+  Future<void> resumeRecording() async {
+    if (!_isRecording || !_isPaused || _cameraController == null) {
+      return;
+    }
+
+    try {
+      await _cameraController!.resumeVideoRecording();
+      _isPaused = false;
+      _startRecordingTimer();
+      _notifyStateChange();
+    } catch (e) {
+      _notifyStateChange();
+      rethrow;
+    }
+  }
+
+  // Toggle audio
+  Future<void> toggleAudio() async {
+    _isAudioEnabled = !_isAudioEnabled;
+
+    if (_cameraController != null && _isInitialized) {
+      final currentCamera = _cameraController!.description;
+      await _cameraController!.dispose();
+      await initializeCamera(
+        cameraDescription: currentCamera,
+        enableAudio: _isAudioEnabled,
+      );
+    }
+
+    _notifyStateChange();
+  }
+
+  // Delete current recording
+  Future<void> deleteCurrentRecording() async {
+    if (_isRecording) {
+      await stopRecording();
+    }
+
+    if (_currentVideoPath != null) {
+      try {
+        final file = File(_currentVideoPath!);
+        if (await file.exists()) {
+          await file.delete();
+        }
+        _currentVideoPath = null;
+      } catch (e) {
+        rethrow;
+      }
     }
   }
 
   // Get all saved videos
-  Future<List<String>> loadSavedVideos() async {
+  Future<List<String>> getSavedVideos() async {
     try {
-      // In a real implementation, this would scan the directory for video files
-      // For this example, we'll just return the list we've been maintaining
-      return _savedVideos;
+      final directory = await getApplicationDocumentsDirectory();
+      final files = Directory(directory.path).listSync();
+      return files
+          .where((file) =>
+              file.path.contains('dashcam_') && file.path.endsWith('.mp4'))
+          .map((file) => file.path)
+          .toList();
     } catch (e) {
-      debugPrint('Error loading saved videos: $e');
       return [];
     }
   }
 
-  // Delete a saved video
-  Future<bool> deleteSavedVideo(String path) async {
-    try {
-      // In a real implementation, this would delete the file from storage
-      // For this example, we'll just remove it from our list
-      final file = File(path);
-      if (await file.exists()) {
-        await file.delete();
-      }
-
-      _savedVideos.remove(path);
-      return true;
-    } catch (e) {
-      debugPrint('Error deleting saved video: $e');
-      return false;
-    }
+  // Start recording timer
+  void _startRecordingTimer() {
+    _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      _elapsedSeconds++;
+      _notifyStateChange();
+    });
   }
 
-  // Get the directory for saving videos
-  Future<Directory> _getVideoDirectory() async {
-    if (_storageLocation == 'local') {
-      if (Platform.isAndroid) {
-        // For Android, use the DCIM directory
-        final directory = Directory('/storage/emulated/0/DCIM/OkDriver');
-        if (!await directory.exists()) {
-          await directory.create(recursive: true);
-        }
-        return directory;
-      } else {
-        // For iOS and other platforms, use the documents directory
-        final directory = await getApplicationDocumentsDirectory();
-        final videoDir = Directory('${directory.path}/OkDriver');
-        if (!await videoDir.exists()) {
-          await videoDir.create(recursive: true);
-        }
-        return videoDir;
-      }
-    } else {
-      // For cloud storage, we would still need a local temporary directory
-      // In a real implementation, this would be handled by a cloud storage service
-      final tempDir = await getTemporaryDirectory();
-      return tempDir;
-    }
-  }
-
-  // Release resources
-  void dispose() {
+  // Stop recording timer
+  void _stopRecordingTimer() {
     _recordingTimer?.cancel();
-    _isCameraInitialized = false;
-    _isRecording = false;
-    _isPaused = false;
+    _recordingTimer = null;
   }
+
+  // Notify state change
+  void _notifyStateChange() {
+    _recordingStateController.add(
+      RecordingState(
+        isInitialized: _isInitialized,
+        isRecording: _isRecording,
+        isPaused: _isPaused,
+        isAudioEnabled: _isAudioEnabled,
+        elapsedSeconds: _elapsedSeconds,
+        currentVideoPath: _currentVideoPath,
+      ),
+    );
+  }
+
+  // Dispose resources
+  Future<void> dispose() async {
+    if (_isRecording) {
+      await stopRecording();
+    }
+    await _cameraController?.dispose();
+    await _recordingStateController.close();
+  }
+
+  // Format recording duration
+  String getFormattedDuration() {
+    final minutes = (_elapsedSeconds ~/ 60).toString().padLeft(2, '0');
+    final seconds = (_elapsedSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+}
+
+class RecordingState {
+  final bool isInitialized;
+  final bool isRecording;
+  final bool isPaused;
+  final bool isAudioEnabled;
+  final int elapsedSeconds;
+  final String? currentVideoPath;
+
+  RecordingState({
+    required this.isInitialized,
+    required this.isRecording,
+    required this.isPaused,
+    required this.isAudioEnabled,
+    required this.elapsedSeconds,
+    this.currentVideoPath,
+  });
 }

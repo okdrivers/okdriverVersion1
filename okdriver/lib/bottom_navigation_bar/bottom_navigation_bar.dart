@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:okdriver/dashcam/dashcam_screen.dart';
+import 'package:okdriver/dashcam/components/camera_selection.dart';
 import 'package:okdriver/driver_profile_screen/driver_profile_screen.dart';
 import 'package:okdriver/home_screen/homescreen.dart';
 import 'package:okdriver/theme/theme_provider.dart';
@@ -15,6 +15,7 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
 
   final List<Widget> _screens = [
     HomeScreen(),
+    CameraSelectionScreen(),
     ProfileScreen(),
   ];
 
@@ -42,6 +43,10 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.home),
             label: 'Home',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.videocam),
+            label: 'Dashcam',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.person),

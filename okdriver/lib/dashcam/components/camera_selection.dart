@@ -1,63 +1,50 @@
 import 'package:flutter/material.dart';
+import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:okdriver/dashcam/dashcam_screen.dart';
 
 class CameraSelectionScreen extends StatefulWidget {
-  final Function(String) onCameraSelected;
-
-  const CameraSelectionScreen({Key? key, required this.onCameraSelected})
-      : super(key: key);
+  const CameraSelectionScreen({Key? key}) : super(key: key);
 
   @override
   State<CameraSelectionScreen> createState() => _CameraSelectionScreenState();
 }
 
 class _CameraSelectionScreenState extends State<CameraSelectionScreen> {
-  final List<Map<String, dynamic>> _cameras = [
-    {
-      'id': 'front',
-      'name': 'Front Camera',
-      'icon': Icons.camera_front,
-      'description': 'Use the front-facing camera',
-    },
-    {
-      'id': 'back',
-      'name': 'Back Camera',
-      'icon': Icons.camera_rear,
-      'description': 'Use the rear-facing camera',
-    },
-    {
-      'id': 'dual',
-      'name': 'Dual Camera',
-      'icon': Icons.camera,
-      'description': 'Use both front and rear cameras',
-    },
-  ];
-
-  String _selectedCamera = 'back'; // Default to back camera
-  bool _hasCameraPermission = false;
+  bool _isLoading = true;
+  List<CameraDescription> _cameras = [];
+  String _errorMessage = '';
 
   @override
   void initState() {
     super.initState();
-    _checkCameraPermission();
+    _initializeCameras();
   }
 
-  Future<void> _checkCameraPermission() async {
-    final status = await Permission.camera.status;
-    setState(() {
-      _hasCameraPermission = status.isGranted;
-    });
-
-    if (!status.isGranted) {
-      await _requestCameraPermission();
+  Future<void> _initializeCameras() async {
+    try {
+      // Request camera permission
+      final status = await Permission.camera.request();
+      if (status.isGranted) {
+        // Get available cameras
+        final cameras = await availableCameras();
+        setState(() {
+          _cameras = cameras;
+          _isLoading = false;
+        });
+      } else {
+        setState(() {
+          _errorMessage =
+              'Camera permission is required to use the dashcam feature';
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Failed to initialize cameras: $e';
+        _isLoading = false;
+      });
     }
-  }
-
-  Future<void> _requestCameraPermission() async {
-    final status = await Permission.camera.request();
-    setState(() {
-      _hasCameraPermission = status.isGranted;
-    });
   }
 
   @override
@@ -65,133 +52,138 @@ class _CameraSelectionScreenState extends State<CameraSelectionScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Select Camera'),
-        elevation: 0,
       ),
-      body: _hasCameraPermission
-          ? _buildCameraSelectionList()
-          : _buildPermissionRequest(),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _errorMessage.isNotEmpty
+              ? Center(child: Text(_errorMessage))
+              : Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'Choose Camera for Dashcam Recording',
+                        style: TextStyle(
+                            fontSize: 20, fontWeight: FontWeight.bold),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 30),
+                      _buildCameraOption(
+                        title: 'Front Camera',
+                        icon: Icons.camera_front,
+                        onTap: () => _navigateToDashcam(CameraType.front),
+                      ),
+                      const SizedBox(height: 16),
+                      _buildCameraOption(
+                        title: 'Back Camera',
+                        icon: Icons.camera_rear,
+                        onTap: () => _navigateToDashcam(CameraType.back),
+                      ),
+                      const SizedBox(height: 16),
+                      _buildCameraOption(
+                        title: 'Dual Camera (Simulated)',
+                        icon: Icons.camera,
+                        onTap: () => _navigateToDashcam(CameraType.dual),
+                      ),
+                    ],
+                  ),
+                ),
     );
   }
 
-  Widget _buildCameraSelectionList() {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: _cameras.length,
-      itemBuilder: (context, index) {
-        final camera = _cameras[index];
-        final isSelected = camera['id'] == _selectedCamera;
-
-        return Card(
-          elevation: 2,
-          margin: const EdgeInsets.only(bottom: 16),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: () {
-              setState(() {
-                _selectedCamera = camera['id'];
-              });
-              widget.onCameraSelected(camera['id']);
-            },
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                border: isSelected
-                    ? Border.all(
-                        color: Theme.of(context).primaryColor, width: 2)
-                    : null,
+  Widget _buildCameraOption({
+    required String title,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return Card(
+      elevation: 4,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Row(
+            children: [
+              Icon(icon, size: 40),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(fontSize: 18),
+                ),
               ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? Theme.of(context).primaryColor
-                          : Colors.grey.shade200,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      camera['icon'],
-                      color: isSelected ? Colors.white : Colors.grey.shade700,
-                      size: 28,
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          camera['name'],
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          camera['description'],
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey.shade600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (isSelected)
-                    Icon(
-                      Icons.check_circle,
-                      color: Theme.of(context).primaryColor,
-                    ),
-                ],
-              ),
-            ),
+              const Icon(Icons.arrow_forward_ios),
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
-  Widget _buildPermissionRequest() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(
-            Icons.camera_alt_outlined,
-            size: 80,
-            color: Colors.grey,
-          ),
-          const SizedBox(height: 24),
-          const Text(
-            'Camera Permission Required',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 16),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 32),
-            child: Text(
-              'OkDriver needs access to your camera to record dashcam footage.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 16, color: Colors.grey),
-            ),
-          ),
-          const SizedBox(height: 24),
-          ElevatedButton(
-            onPressed: _requestCameraPermission,
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-            ),
-            child: const Text('Grant Permission'),
-          ),
-        ],
+  void _navigateToDashcam(CameraType cameraType) {
+    // Check if we have the required cameras
+    if (_cameras.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No cameras available on this device')),
+      );
+      return;
+    }
+
+    // Find front and back cameras
+    CameraDescription? frontCamera;
+    CameraDescription? backCamera;
+
+    for (var camera in _cameras) {
+      if (camera.lensDirection == CameraLensDirection.front) {
+        frontCamera = camera;
+      } else if (camera.lensDirection == CameraLensDirection.back) {
+        backCamera = camera;
+      }
+    }
+
+    // Validate camera selection based on type
+    switch (cameraType) {
+      case CameraType.front:
+        if (frontCamera == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Front camera not available')),
+          );
+          return;
+        }
+        break;
+      case CameraType.back:
+        if (backCamera == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Back camera not available')),
+          );
+          return;
+        }
+        break;
+      case CameraType.dual:
+        // For dual mode, we need at least one camera (preferably front)
+        if (frontCamera == null && backCamera == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No cameras available for dual mode')),
+          );
+          return;
+        }
+        break;
+    }
+
+    // Navigate to dashcam screen with selected camera type
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => DashcamScreen(
+          cameraType: cameraType,
+          frontCamera: frontCamera,
+          backCamera: backCamera,
+        ),
       ),
     );
   }
 }
+
+// Enum to represent camera types
+enum CameraType { front, back, dual }

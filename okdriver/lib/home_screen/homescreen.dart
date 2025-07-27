@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:okdriver/dashcam/components/camera_selection.dart';
 import 'package:okdriver/dashcam/dashcam_screen.dart';
-import 'package:okdriver/home_screen/components/dashcam/dashcam.dart';
+
 import 'package:okdriver/permissionscreen/permissionscreen.dart' as permission;
 import 'package:provider/provider.dart';
 import 'package:okdriver/theme/theme_provider.dart';
@@ -251,14 +252,7 @@ class _HomeScreenState extends State<HomeScreen> {
         gradient: const LinearGradient(
           colors: [Color(0xFF4CAF50), Color(0xFF45A049)],
         ),
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const DashcamScreen(),
-            ),
-          );
-        },
+        onTap: () {},
       ),
     );
   }
