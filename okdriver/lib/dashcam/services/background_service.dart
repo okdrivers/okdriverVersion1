@@ -1,231 +1,16 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:okdriver/utlis/android14_storage_helper.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_background_service_android/flutter_background_service_android.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_local_notifications_platform_interface/flutter_local_notifications_platform_interface.dart';
 import 'package:image_gallery_saver/image_gallery_saver.dart';
-
-const notificationChannelId = 'my_foreground';
-const notificationId = 888;
-
-// Initialize service with proper notification channel
-Future<void> initializeService() async {
-  final service = FlutterBackgroundService();
-
-  // Create notification channel for Android 8.0+
-  await _createNotificationChannel();
-
-  await service.configure(
-    androidConfiguration: AndroidConfiguration(
-      onStart: onStart,
-      isForegroundMode: true,
-      autoStart: false,
-      notificationChannelId: notificationChannelId,
-      initialNotificationTitle: 'Dashcam Recording',
-      initialNotificationContent: 'Initializing',
-      foregroundServiceNotificationId: notificationId,
-    ),
-    iosConfiguration: IosConfiguration(
-      autoStart: false,
-      onForeground: onStart,
-      onBackground: onIosBackground,
-    ),
-  );
-}
-
-// Create notification channel for Android 8.0+
-Future<void> _createNotificationChannel() async {
-  final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
-  const androidNotificationChannel = AndroidNotificationChannel(
-    notificationChannelId, // Same channel ID as used in service
-    'Dashcam Recording Service', // Channel name
-    description:
-        'Notifications for dashcam recording service', // Channel description
-    importance: Importance.low, // Low importance to minimize visibility
-  );
-
-  await flutterLocalNotificationsPlugin
-      .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>()
-      ?.createNotificationChannel(androidNotificationChannel);
-}
-
-@pragma('vm:entry-point')
-Future<bool> onIosBackground(ServiceInstance service) async {
-  WidgetsFlutterBinding.ensureInitialized();
-  DartPluginRegistrant.ensureInitialized();
-  return true;
-}
-
-@pragma('vm:entry-point')
-void onStart(ServiceInstance service) async {
-  // Ensure Flutter is initialized in this isolate
-  WidgetsFlutterBinding.ensureInitialized();
-  DartPluginRegistrant.ensureInitialized();
-
-  // Global variables for background recording
-  CameraController? cameraController;
-  bool isRecording = false;
-  String? currentVideoPath;
-  int elapsedSeconds = 0;
-
-  if (service is AndroidServiceInstance) {
-    service.on('setAsForeground').listen((event) {
-      if (event != null && event is Map<String, dynamic>) {
-        service.setAsForegroundService();
-      }
-    });
-
-    service.on('setAsBackground').listen((event) {
-      service.setAsBackgroundService();
-    });
-
-    // Handle start recording event
-    service.on('startRecording').listen((event) async {
-      if (event != null && event is Map<String, dynamic>) {
-        try {
-          // Initialize camera if needed
-          if (cameraController == null ||
-              !cameraController!.value.isInitialized) {
-            final cameras = await availableCameras();
-            if (cameras.isEmpty) return;
-
-            // Use the first camera (usually back camera)
-            final cameraDescription = cameras.first;
-
-            cameraController = CameraController(
-              cameraDescription,
-              ResolutionPreset.high,
-              enableAudio: true,
-              imageFormatGroup: ImageFormatGroup.jpeg,
-            );
-
-            await cameraController!.initialize();
-          }
-
-          // Start recording
-          if (!isRecording) {
-            final directory = await getApplicationDocumentsDirectory();
-            final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-            currentVideoPath = '${directory.path}/dashcam_$timestamp.mp4';
-
-            await cameraController!.startVideoRecording();
-            isRecording = true;
-            elapsedSeconds = 0;
-
-            print('Background recording started: $currentVideoPath');
-          }
-        } catch (e) {
-          print('Error starting background recording: $e');
-        }
-      }
-    });
-
-    // Handle stop recording event
-    service.on('stopRecording').listen((event) async {
-      if (isRecording &&
-          cameraController != null &&
-          cameraController!.value.isRecordingVideo) {
-        try {
-          final videoFile = await cameraController!.stopVideoRecording();
-          isRecording = false;
-          print('Background recording stopped: ${videoFile.path}');
-
-          // Save to gallery
-          try {
-            await ImageGallerySaver.saveFile(videoFile.path);
-            print('Video saved to gallery');
-          } catch (e) {
-            print('Error saving to gallery: $e');
-          }
-
-          service.invoke('recordingStopped', {'videoPath': videoFile.path});
-        } catch (e) {
-          print('Error stopping background recording: $e');
-        }
-      }
-    });
-  }
-
-  service.on('stopService').listen((event) {
-    // Stop recording if active before stopping service
-    if (isRecording &&
-        cameraController != null &&
-        cameraController!.value.isRecordingVideo) {
-      cameraController!.stopVideoRecording().then((file) {
-        print('Recording stopped before service termination: ${file.path}');
-      }).catchError((error) {
-        print('Error stopping recording: $error');
-      });
-    }
-
-    // Dispose camera controller
-    cameraController?.dispose();
-
-    service.stopSelf();
-  });
-
-  // Set service to run in background with minimal notification
-  if (service is AndroidServiceInstance) {
-    try {
-      service.setAsForegroundService();
-      // Android requires a valid notification for foreground services
-      service.setForegroundNotificationInfo(
-        title: "Dashcam Running",
-        content: "Recording in background",
-      );
-    } catch (e) {
-      print('Error setting foreground service: $e');
-    }
-  }
-
-  // Update service state and notification periodically
-  Timer.periodic(const Duration(seconds: 1), (timer) async {
-    if (service is AndroidServiceInstance) {
-      try {
-        if (await service.isForegroundService()) {
-          if (isRecording) {
-            elapsedSeconds++;
-            final minutes = (elapsedSeconds ~/ 60).toString().padLeft(2, '0');
-            final seconds = (elapsedSeconds % 60).toString().padLeft(2, '0');
-
-            // Update notification with recording status and time
-            service.setForegroundNotificationInfo(
-              title: "Dashcam Recording",
-              content: "Recording: $minutes:$seconds",
-            );
-          } else {
-            // Update notification for standby mode
-            service.setForegroundNotificationInfo(
-              title: "Dashcam Ready",
-              content: "Ready to record",
-            );
-          }
-        }
-      } catch (e) {
-        print('Error updating foreground notification: $e');
-      }
-    }
-
-    try {
-      service.invoke(
-        'update',
-        {
-          "current_date": DateTime.now().toIso8601String(),
-          "elapsed_seconds": elapsedSeconds,
-          "is_recording": isRecording,
-        },
-      );
-    } catch (e) {
-      print('Error invoking update event: $e');
-    }
-  });
-}
+// import 'package:okdriver/utils/android14_storage_helper.dart';
 
 class DashcamBackgroundService {
   static final DashcamBackgroundService _instance =
@@ -233,118 +18,163 @@ class DashcamBackgroundService {
   factory DashcamBackgroundService() => _instance;
   DashcamBackgroundService._internal();
 
-  CameraController? _cameraController;
+  // Native method channel for Android camera service
+  static const MethodChannel _channel =
+      MethodChannel('com.example.okdriver/background_recording');
+
+  // Recording state
   bool _isRecording = false;
-  Timer? _timer;
-  Timer? _recordingTimer;
-  Timer? _autoStopTimer;
   int _elapsedSeconds = 0;
+  String? _currentVideoPath;
+  int _maxRecordingDurationSeconds = 15 * 60; // Default 15 minutes
+  Timer? _autoStopTimer;
+  Timer? _durationTimer;
+
+  // Background service
   FlutterBackgroundService? _backgroundService;
   bool _isServiceRunning = false;
 
-  String? _currentVideoPath;
-  int _maxRecordingDurationSeconds = 15 * 60; // Default 15 minutes
+  // Getters
+  bool get isRecording => _isRecording;
+  int get elapsedSeconds => _elapsedSeconds;
+  String? get currentVideoPath => _currentVideoPath;
+  bool get isServiceRunning => _isServiceRunning;
 
   // Initialize the background service
   Future<void> initialize({
-    required CameraController cameraController,
-    required int maxRecordingDurationMinutes,
+    CameraController? cameraController,
+    int maxRecordingDurationMinutes = 15,
   }) async {
-    _cameraController = cameraController;
     _maxRecordingDurationSeconds = maxRecordingDurationMinutes * 60;
 
     try {
+      // Initialize the native Android camera service
+      final result =
+          await _channel.invokeMethod('initializeBackgroundRecording');
+      print('Native camera service initialized: $result');
+
       // Initialize the background service
       await initializeService();
 
-      // Get the service instance in the main isolate
-      _backgroundService = FlutterBackgroundService();
-
-      // Listen for updates from the background service
-      _backgroundService?.on('update').listen((event) {
-        if (event != null && event is Map<String, dynamic>) {
-          if (event.containsKey('elapsed_seconds')) {
-            _elapsedSeconds = event['elapsed_seconds'] as int;
-          }
-          if (event.containsKey('is_recording')) {
-            _isRecording = event['is_recording'] as bool;
-          }
-        }
-      });
-
-      // Listen for recording stopped event
-      _backgroundService?.on('recordingStopped').listen((event) {
-        if (event != null && event is Map<String, dynamic>) {
-          if (event.containsKey('videoPath')) {
-            _currentVideoPath = event['videoPath'] as String;
-            print('Recording stopped in background: $_currentVideoPath');
-          }
-        }
-      });
+      print('Background service initialized successfully');
     } catch (e) {
-      print('Error initializing background service in main isolate: $e');
+      print('Error initializing background service: $e');
+      throw Exception('Failed to initialize background service: $e');
     }
+  }
+
+  // Initialize the Flutter background service
+  Future<void> initializeService() async {
+    final service = FlutterBackgroundService();
+
+    // Configure notification settings
+    const AndroidNotificationChannel channel = AndroidNotificationChannel(
+      'dashcam_recording_channel',
+      'Dashcam Recording',
+      description: 'Shows dashcam recording status',
+      importance: Importance.low,
+    );
+
+    final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+        FlutterLocalNotificationsPlugin();
+
+    await flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(channel);
+
+    // Configure background service
+    await service.configure(
+      androidConfiguration: AndroidConfiguration(
+        onStart: onStart,
+        autoStart: false,
+        isForegroundMode: true,
+        notificationChannelId: 'dashcam_recording_channel',
+        initialNotificationTitle: 'Dashcam Service',
+        initialNotificationContent: 'Initializing...',
+        foregroundServiceNotificationId: 1001,
+      ),
+      iosConfiguration: IosConfiguration(
+        autoStart: false,
+        onForeground: onStart,
+        onBackground: onIosBackground,
+      ),
+    );
+
+    _backgroundService = service;
   }
 
   // Start background recording
   Future<void> startBackgroundRecording() async {
-    if (_isRecording) return; // Prevent multiple starts
+    if (_isRecording) {
+      print('Already recording, skipping start');
+      return;
+    }
 
     try {
-      // Start the background service if not already running
-      if (!_isServiceRunning) {
-        await _backgroundService?.startService();
+      // Start the native Android camera recording
+      final result = await _channel.invokeMethod('startBackgroundRecording');
+      print('Native recording result: $result');
+
+      if (result is Map && result['success'] == true) {
+        _isRecording = true;
+        _currentVideoPath = result['filePath'] as String?;
+        _elapsedSeconds = 0;
         _isServiceRunning = true;
+
+        // Start duration timer
+        _startDurationTimer();
+
+        // Set up automatic stop
+        _setupAutomaticStop();
+
+        print('Background recording started successfully');
+      } else {
+        throw Exception('Failed to start native recording: $result');
       }
-
-      // Tell the service to start recording
-      _backgroundService?.invoke('startRecording', {
-        'enableAudio': true,
-        'maxDurationSeconds': _maxRecordingDurationSeconds,
-      });
-
-      _isRecording = true;
-      _elapsedSeconds = 0;
-
-      // Set up automatic stop based on max duration
-      _setupAutomaticStop();
     } catch (e) {
       print('Error starting background recording: $e');
-      // Reset state if service fails to start
-      _isServiceRunning = false;
-      _isRecording = false;
       throw Exception('Failed to start background recording: $e');
     }
   }
 
   // Stop background recording
   Future<void> stopBackgroundRecording() async {
-    if (!_isRecording) return; // Prevent multiple stops
+    if (!_isRecording) return;
 
     try {
-      // Tell the service to stop recording
-      _backgroundService?.invoke('stopRecording');
+      // Stop the native Android camera recording
+      final result = await _channel.invokeMethod('stopBackgroundRecording');
+      print('Native recording stop result: $result');
 
       _isRecording = false;
       _autoStopTimer?.cancel();
+      _durationTimer?.cancel();
       _elapsedSeconds = 0;
+
+      if (result is Map && result['filePath'] != null) {
+        _currentVideoPath = result['filePath'] as String?;
+
+        // Save to gallery if we have a video file
+        if (_currentVideoPath != null) {
+          try {
+            await _saveVideoToGallery(_currentVideoPath!);
+            print('Video saved to gallery: $_currentVideoPath');
+          } catch (e) {
+            print('Error saving to gallery: $e');
+          }
+        }
+      }
+
+      print('Background recording stopped successfully');
     } catch (e) {
       print('Error stopping background recording: $e');
       // Reset state even if there's an error
       _isRecording = false;
       _autoStopTimer?.cancel();
+      _durationTimer?.cancel();
       _elapsedSeconds = 0;
     }
-  }
-
-  // Set up automatic stop based on max duration
-  void _setupAutomaticStop() {
-    _autoStopTimer?.cancel();
-    _autoStopTimer = Timer(Duration(seconds: _maxRecordingDurationSeconds), () {
-      if (_isRecording) {
-        stopBackgroundRecording();
-      }
-    });
   }
 
   // Stop the background service completely
@@ -363,13 +193,37 @@ class DashcamBackgroundService {
     }
   }
 
-  // Dispose resources
-  void dispose() {
-    if (_isRecording) {
-      stopBackgroundRecording();
-    }
+  // Start duration timer
+  void _startDurationTimer() {
+    _durationTimer?.cancel();
+    _durationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_isRecording) {
+        _elapsedSeconds++;
+
+        // Update notification with current duration
+        if (_backgroundService != null) {
+          final minutes = (_elapsedSeconds ~/ 60).toString().padLeft(2, '0');
+          final seconds = (_elapsedSeconds % 60).toString().padLeft(2, '0');
+
+          _backgroundService!.invoke('updateNotification', {
+            'title': 'Dashcam Recording',
+            'content': 'Recording in background: $minutes:$seconds',
+          });
+        }
+      } else {
+        timer.cancel();
+      }
+    });
+  }
+
+  // Set up automatic stop based on max duration
+  void _setupAutomaticStop() {
     _autoStopTimer?.cancel();
-    _autoStopTimer = null;
+    _autoStopTimer = Timer(Duration(seconds: _maxRecordingDurationSeconds), () {
+      if (_isRecording) {
+        stopBackgroundRecording();
+      }
+    });
   }
 
   // Get formatted duration
@@ -378,15 +232,6 @@ class DashcamBackgroundService {
     final seconds = (_elapsedSeconds % 60).toString().padLeft(2, '0');
     return '$minutes:$seconds';
   }
-
-  // Check if recording is in progress
-  bool get isRecording => _isRecording;
-
-  // Get elapsed seconds
-  int get elapsedSeconds => _elapsedSeconds;
-
-  // Get current video path
-  String? get currentVideoPath => _currentVideoPath;
 
   // Get remaining time in seconds
   int get remainingSeconds => _maxRecordingDurationSeconds - _elapsedSeconds;
@@ -401,6 +246,72 @@ class DashcamBackgroundService {
     return '$minutes:$seconds';
   }
 
-  // Check if service is running
-  bool get isServiceRunning => _isServiceRunning;
+  // Save video to gallery
+  Future<void> _saveVideoToGallery(String videoPath) async {
+    try {
+      // Use the storage helper to get the appropriate directory
+      final storageDir = await Android14StorageHelper.getAppStorageDirectory();
+
+      final result = await ImageGallerySaver.saveFile(
+        videoPath,
+        name: 'dashcam_${DateTime.now().millisecondsSinceEpoch}.mp4',
+      );
+
+      if (result['isSuccess'] == true) {
+        print('Video saved to gallery successfully');
+      } else {
+        print('Failed to save video to gallery: $result');
+      }
+    } catch (e) {
+      print('Error saving video to gallery: $e');
+      throw e;
+    }
+  }
+
+  // Dispose resources
+  void dispose() {
+    if (_isRecording) {
+      stopBackgroundRecording();
+    }
+    _autoStopTimer?.cancel();
+    _durationTimer?.cancel();
+    _autoStopTimer = null;
+    _durationTimer = null;
+  }
+}
+
+// Background service callbacks
+@pragma('vm:entry-point')
+void onStart(ServiceInstance service) async {
+  // This is called when the background service starts
+  print('Background service started');
+
+  if (service is AndroidServiceInstance) {
+    service.setAsForegroundService();
+  }
+
+  // Handle service events
+  service.on('updateNotification').listen((event) async {
+    if (event != null && event is Map<String, dynamic>) {
+      final title = event['title'] as String? ?? 'Dashcam Recording';
+      final content =
+          event['content'] as String? ?? 'Recording in background...';
+
+      if (service is AndroidServiceInstance) {
+        service.setForegroundNotificationInfo(
+          title: title,
+          content: content,
+        );
+      }
+    }
+  });
+
+  service.on('stopService').listen((event) {
+    service.stopSelf();
+  });
+}
+
+@pragma('vm:entry-point')
+Future<bool> onIosBackground(ServiceInstance service) async {
+  return true;
 }

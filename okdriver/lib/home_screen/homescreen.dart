@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:okdriver/dashcam/components/camera_selection.dart';
 import 'package:okdriver/dashcam/dashcam_screen.dart';
+import 'package:okdriver/okdriver_virtual_assistant/okdriver_virtual_assistant_screen.dart';
 
 import 'package:okdriver/permissionscreen/permissionscreen.dart' as permission;
 import 'package:provider/provider.dart';
@@ -294,7 +295,14 @@ class _HomeScreenState extends State<HomeScreen> {
         gradient: const LinearGradient(
           colors: [Color(0xFF9C27B0), Color(0xFF7B1FA2)],
         ),
-        onTap: () => _onFeatureTap('OkDriver Assistant'),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => OkDriverVirtualAssistantScreen(),
+            ),
+          );
+        },
       ),
     );
   }

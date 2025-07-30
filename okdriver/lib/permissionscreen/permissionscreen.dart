@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:okdriver/onboarding_screen/onboardind.dart';
+import 'package:okdriver/utlis/android14_storage_helper.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/services.dart';
+import 'dart:io';
 
 // Theme Provider for managing light/dark themes
 class ThemeProvider extends ChangeNotifier {
@@ -71,58 +73,144 @@ class _PermissionScreenState extends State<PermissionScreen>
   bool allPermissionsGranted = false;
   int grantedCount = 0;
 
-  // List of required permissions
-  final List<PermissionData> requiredPermissions = [
-    PermissionData(
-      permission: Permission.camera,
-      title: 'Camera Access',
-      description: 'Capture photos and videos for your profile',
-      icon: Icons.camera_alt_outlined,
-      color: const Color(0xFF424242),
-    ),
-    PermissionData(
-      permission: Permission.microphone,
-      title: 'Microphone',
-      description: 'Record audio for calls and voice messages',
-      icon: Icons.mic_outlined,
-      color: const Color(0xFF424242),
-    ),
-    PermissionData(
-      permission: Permission.location,
-      title: 'Location Services',
-      description: 'Find nearby drivers and optimize routes',
-      icon: Icons.location_on_outlined,
-      color: const Color(0xFF424242),
-    ),
-    PermissionData(
-      permission: Permission.notification,
-      title: 'Push Notifications',
-      description: 'Receive ride updates and important alerts',
-      icon: Icons.notifications_outlined,
-      color: const Color(0xFF424242),
-    ),
-    PermissionData(
-      permission: Permission.bluetooth,
-      title: 'Bluetooth',
-      description: 'Connect with in-car systems seamlessly',
-      icon: Icons.bluetooth_outlined,
-      color: const Color(0xFF424242),
-    ),
-    PermissionData(
-      permission: Permission.storage,
-      title: 'Storage Access',
-      description: 'Save trip data and offline maps',
-      icon: Icons.folder_outlined,
-      color: const Color(0xFF424242),
-    ),
-    PermissionData(
-      permission: Permission.phone,
-      title: 'Phone Access',
-      description: 'Make emergency calls and contact support',
-      icon: Icons.phone_outlined,
-      color: const Color(0xFF424242),
-    ),
-  ];
+  // List of required permissions - Updated for Android 14 compatibility
+  List<PermissionData> get requiredPermissions {
+    final List<PermissionData> permissions = [
+      PermissionData(
+        permission: Permission.camera,
+        title: 'Camera Access',
+        description: 'Capture photos and videos for your profile',
+        icon: Icons.camera_alt_outlined,
+        color: const Color(0xFF424242),
+      ),
+      PermissionData(
+        permission: Permission.microphone,
+        title: 'Microphone',
+        description: 'Record audio for calls and voice messages',
+        icon: Icons.mic_outlined,
+        color: const Color(0xFF424242),
+      ),
+      PermissionData(
+        permission: Permission.location,
+        title: 'Location Services',
+        description: 'Find nearby drivers and optimize routes',
+        icon: Icons.location_on_outlined,
+        color: const Color(0xFF424242),
+      ),
+      PermissionData(
+        permission: Permission.notification,
+        title: 'Push Notifications',
+        description: 'Receive ride updates and important alerts',
+        icon: Icons.notifications_outlined,
+        color: const Color(0xFF424242),
+      ),
+      PermissionData(
+        permission: Permission.bluetooth,
+        title: 'Bluetooth',
+        description: 'Connect with in-car systems seamlessly',
+        icon: Icons.bluetooth_outlined,
+        color: const Color(0xFF424242),
+      ),
+      PermissionData(
+        permission: Permission.phone,
+        title: 'Phone Access',
+        description: 'Make emergency calls and contact support',
+        icon: Icons.phone_outlined,
+        color: const Color(0xFF424242),
+      ),
+    ];
+
+    // Add storage permissions based on Android version
+    if (Platform.isAndroid) {
+      // For Android 13+ (API 33+), use granular media permissions
+      if (_isAndroid13Plus()) {
+        // Add media permissions for Android 13+
+        permissions.addAll([
+          PermissionData(
+            permission: Permission.photos,
+            title: 'Photos & Videos',
+            description: 'Access photos and videos for profile pictures',
+            icon: Icons.photo_library_outlined,
+            color: const Color(0xFF424242),
+          ),
+          PermissionData(
+            permission: Permission.videos,
+            title: 'Video Access',
+            description: 'Access videos for dashcam recordings',
+            icon: Icons.video_library_outlined,
+            color: const Color(0xFF424242),
+          ),
+          PermissionData(
+            permission: Permission.audio,
+            title: 'Audio Access',
+            description: 'Access audio files for voice messages',
+            icon: Icons.audiotrack_outlined,
+            color: const Color(0xFF424242),
+          ),
+        ]);
+      } else {
+        // For older Android versions, use storage permission
+        permissions.add(
+          PermissionData(
+            permission: Permission.storage,
+            title: 'Storage Access',
+            description: 'Save trip data and offline maps',
+            icon: Icons.folder_outlined,
+            color: const Color(0xFF424242),
+          ),
+        );
+      }
+    } else {
+      // For iOS, use storage permission
+      permissions.add(
+        PermissionData(
+          permission: Permission.storage,
+          title: 'Storage Access',
+          description: 'Save trip data and offline maps',
+          icon: Icons.folder_outlined,
+          color: const Color(0xFF424242),
+        ),
+      );
+    }
+
+    return permissions;
+  }
+
+  // Helper method to safely check if running on Android 13+
+  bool _isAndroid13Plus() {
+    if (!Platform.isAndroid) return false;
+
+    try {
+      final version = Platform.operatingSystemVersion;
+      print('Android version string: $version');
+
+      // Handle different version string formats
+      if (version.contains('release-keys') || version.contains('user')) {
+        // This is a build fingerprint, not a version number
+        // We'll assume it's a recent Android version and use granular permissions
+        print('Detected build fingerprint, assuming Android 13+');
+        return true;
+      }
+
+      // Try to extract API level from version string
+      final parts = version.split(' ');
+      for (final part in parts) {
+        final apiLevel = int.tryParse(part);
+        if (apiLevel != null && apiLevel >= 33) {
+          print('Detected Android API level: $apiLevel');
+          return true;
+        }
+      }
+
+      // If we can't parse the version, assume it's a recent Android version
+      print('Could not parse Android version, assuming Android 13+');
+      return true;
+    } catch (e) {
+      print('Error parsing Android version: $e');
+      // Default to using granular permissions for safety
+      return true;
+    }
+  }
 
   @override
   void initState() {
@@ -213,8 +301,38 @@ class _PermissionScreenState extends State<PermissionScreen>
         final permissionData = requiredPermissions[i];
         if (permissionStatuses[permissionData.permission] !=
             PermissionStatus.granted) {
-          final status = await permissionData.permission.request();
-          permissionStatuses[permissionData.permission] = status;
+          // Special handling for storage permissions on Android 13+
+          if (Platform.isAndroid &&
+              Android14StorageHelper.getStoragePermissions()
+                  .contains(permissionData.permission)) {
+            // Use the helper for storage permissions
+            try {
+              final storageResults =
+                  await Android14StorageHelper.requestStoragePermissions();
+
+              // Update the permission statuses
+              for (final entry in storageResults.entries) {
+                permissionStatuses[entry.key] = entry.value;
+              }
+
+              // Check if any storage permissions were denied
+              final deniedPermissions = storageResults.entries
+                  .where((entry) => entry.value != PermissionStatus.granted)
+                  .map((entry) => entry.key)
+                  .toList();
+
+              if (deniedPermissions.isNotEmpty) {
+                _showAndroid14StorageGuidance();
+              }
+            } catch (e) {
+              print('Error requesting storage permissions: $e');
+              _showAndroid14StorageGuidance();
+            }
+          } else {
+            // Standard permission request for other permissions
+            final status = await permissionData.permission.request();
+            permissionStatuses[permissionData.permission] = status;
+          }
 
           setState(() {
             _updatePermissionCounts();
@@ -484,6 +602,141 @@ class _PermissionScreenState extends State<PermissionScreen>
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (context) => OnboardingScreen()),
+    );
+  }
+
+  void _showAndroid14StorageGuidance() {
+    final isDark = _themeProvider.isDarkTheme;
+    final instructions = Android14StorageHelper.getPermissionInstructions();
+    final message = Android14StorageHelper.getStoragePermissionMessage();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: const BoxDecoration(
+                color: Color(0xFF757575),
+                shape: BoxShape.circle,
+              ),
+              child:
+                  const Icon(Icons.info_outline, color: Colors.white, size: 24),
+            ),
+            const SizedBox(width: 15),
+            Expanded(
+              child: Text(
+                Android14StorageHelper.isAndroid14
+                    ? 'Android 14 Storage Access'
+                    : 'Storage Permission Required',
+                style: TextStyle(
+                  color: isDark ? Colors.white : Colors.black,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              message,
+              style: TextStyle(
+                color:
+                    isDark ? const Color(0xFFBDBDBD) : const Color(0xFF757575),
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 16),
+            ...instructions.map((instruction) => _buildGuidanceStep(
+                instruction.split('.')[0],
+                instruction.substring(instruction.indexOf('.') + 1).trim(),
+                isDark)),
+            const SizedBox(height: 16),
+            Text(
+              'This is required for saving dashcam recordings and profile pictures.',
+              style: TextStyle(
+                color:
+                    isDark ? const Color(0xFFBDBDBD) : const Color(0xFF757575),
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(
+              'Skip',
+              style: TextStyle(
+                color:
+                    isDark ? const Color(0xFFBDBDBD) : const Color(0xFF757575),
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              openAppSettings();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: isDark ? Colors.white : Colors.black,
+              foregroundColor: isDark ? Colors.black : Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+              elevation: 0,
+            ),
+            child: const Text('Open Settings'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGuidanceStep(String number, String text, bool isDark) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 20,
+            height: 20,
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white : Colors.black,
+              shape: BoxShape.circle,
+            ),
+            child: Center(
+              child: Text(
+                number,
+                style: TextStyle(
+                  color: isDark ? Colors.black : Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                color:
+                    isDark ? const Color(0xFFBDBDBD) : const Color(0xFF757575),
+                fontSize: 14,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

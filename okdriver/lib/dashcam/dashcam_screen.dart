@@ -40,75 +40,141 @@ class _DashcamScreenState extends State<DashcamScreen>
   int _elapsedSeconds = 0;
   String? _currentVideoPath;
 
+  // Background service instance
+  final DashcamBackgroundService _backgroundService =
+      DashcamBackgroundService();
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initializeCamera();
+    _initializeNativeService();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _stopRecordingTimer();
-    _cameraController.dispose();
+
+    // Safely dispose camera controller
+    try {
+      if (_cameraController.value.isInitialized) {
+        _cameraController.dispose();
+      }
+    } catch (e) {
+      print('Error disposing camera controller: $e');
+    }
+
+    _backgroundService.dispose();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) async {
-    if (!_cameraController.value.isInitialized) {
-      return;
-    }
-
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       // App is going to background
       print('App going to background, current recording state: $_isRecording');
 
-      // If recording, ensure the background service is running
-      if (_isRecording) {
-        print('Transferring recording to background service');
-        // Initialize background service with current camera settings
-        await DashcamBackgroundService().initialize(
-          cameraController: _cameraController,
-          maxRecordingDurationMinutes: _getDurationInMinutes(),
-        );
+      // Check if we're currently recording
+      bool isCurrentlyRecording = _isRecording ||
+          (_cameraController.value.isInitialized &&
+              _cameraController.value.isRecordingVideo);
 
-        // Start background recording
-        await DashcamBackgroundService().startBackgroundRecording();
+      if (isCurrentlyRecording) {
+        print('Transferring recording to native background service');
 
-        // We don't stop the current recording as the background service will handle it
+        try {
+          // Initialize background service with current camera settings
+          await _backgroundService.initialize(
+            maxRecordingDurationMinutes: _getDurationInMinutes(),
+          );
+
+          // Start background recording using native Android service
+          await _backgroundService.startBackgroundRecording();
+
+          // Stop the foreground recording since native service will handle it
+          if (_cameraController.value.isRecordingVideo) {
+            try {
+              await _cameraController.stopVideoRecording();
+              print('Foreground recording stopped, native service taking over');
+            } catch (e) {
+              print('Error stopping foreground recording: $e');
+            }
+          }
+
+          // Update UI state to reflect background recording
+          setState(() {
+            _isRecording = true;
+            _elapsedSeconds = 0;
+            _recordingDuration = '00:00';
+          });
+
+          print(
+              'Recording transferred to native background service successfully');
+        } catch (e) {
+          print('Error transferring to background service: $e');
+          // If background service fails, keep foreground recording active
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Background recording failed: $e')),
+          );
+        }
       } else {
-        // Dispose of the controller when the app is in the background if not recording
-        _cameraController.dispose();
-        _isInitialized = false;
+        // Only dispose if camera is initialized and not recording
+        if (_cameraController.value.isInitialized) {
+          print('Disposing camera controller - not recording');
+          try {
+            _cameraController.dispose();
+            _isInitialized = false;
+            print('Camera controller disposed successfully');
+          } catch (e) {
+            print('Error disposing camera controller: $e');
+          }
+        }
       }
     } else if (state == AppLifecycleState.resumed) {
       print('App resumed from background');
 
       // Reinitialize the camera if needed
       if (!_cameraController.value.isInitialized) {
-        await _initializeCamera();
+        print('Reinitializing camera controller');
+        try {
+          await _initializeCamera();
+          print('Camera reinitialization completed');
+        } catch (e) {
+          print('Error reinitializing camera: $e');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error reinitializing camera: $e')),
+          );
+        }
       }
 
-      // Check if background service was recording
-      if (DashcamBackgroundService().isRecording) {
-        print('Background service was recording, syncing state');
+      // Check if native background service was recording
+      if (_backgroundService.isRecording) {
+        print('Native background service was recording, syncing state');
 
         // Update UI state to match background service
         setState(() {
           _isRecording = true;
-          _elapsedSeconds = DashcamBackgroundService().elapsedSeconds;
+          _elapsedSeconds = _backgroundService.elapsedSeconds;
           final minutes = (_elapsedSeconds ~/ 60).toString().padLeft(2, '0');
           final seconds = (_elapsedSeconds % 60).toString().padLeft(2, '0');
           _recordingDuration = '$minutes:$seconds';
         });
 
-        // Continue recording in foreground
-        await DashcamBackgroundService().stopBackgroundRecording();
+        // Stop background recording and continue in foreground
+        await _backgroundService.stopBackgroundRecording();
 
-        // We don't need to start recording again as it's already running
+        // Start recording in foreground if camera is ready
+        if (_cameraController.value.isInitialized) {
+          try {
+            await _startRecording();
+            print('Recording continued in foreground');
+          } catch (e) {
+            print('Error continuing recording in foreground: $e');
+          }
+        }
       } else if (_isRecording) {
         // Our state thinks we're recording but background service isn't
         // This could happen if the background service stopped recording due to error or time limit
@@ -122,40 +188,68 @@ class _DashcamScreenState extends State<DashcamScreen>
     }
   }
 
-  Future<void> _initializeCamera() async {
-    // Determine which camera to use based on the selected type
-    CameraDescription cameraToUse;
-
-    switch (widget.cameraType) {
-      case CameraType.front:
-        cameraToUse = widget.frontCamera!;
-        break;
-      case CameraType.back:
-        cameraToUse = widget.backCamera!;
-        break;
-      case CameraType.dual:
-        // For dual mode, we'll use the front camera as primary
-        // In a real implementation, we would handle both cameras
-        cameraToUse = widget.frontCamera ?? widget.backCamera!;
-        break;
-    }
-
-    // Initialize the camera controller
-    _cameraController = CameraController(
-      cameraToUse,
-      ResolutionPreset.high,
-      enableAudio: _isAudioEnabled,
-    );
-
+  Future<void> _initializeNativeService() async {
     try {
-      await _cameraController.initialize();
-      setState(() {
-        _isInitialized = true;
-      });
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error initializing camera: $e')),
+      // Initialize the background recording service
+      await _backgroundService.initialize(
+        maxRecordingDurationMinutes: _getDurationInMinutes(),
       );
+      print('Background recording service initialized');
+    } catch (e) {
+      print('Error initializing background recording service: $e');
+    }
+  }
+
+  Future<void> _initializeCamera() async {
+    try {
+      print('Starting camera initialization...');
+
+      // Determine which camera to use based on the selected type
+      CameraDescription cameraToUse;
+
+      switch (widget.cameraType) {
+        case CameraType.front:
+          cameraToUse = widget.frontCamera!;
+          break;
+        case CameraType.back:
+          cameraToUse = widget.backCamera!;
+          break;
+        case CameraType.dual:
+          // For dual mode, we'll use the front camera as primary
+          // In a real implementation, we would handle both cameras
+          cameraToUse = widget.frontCamera ?? widget.backCamera!;
+          break;
+      }
+
+      print('Selected camera: ${cameraToUse.name}');
+
+      // Initialize the camera controller
+      _cameraController = CameraController(
+        cameraToUse,
+        ResolutionPreset.high,
+        enableAudio: _isAudioEnabled,
+      );
+
+      print('Camera controller created, initializing...');
+      await _cameraController.initialize();
+
+      print('Camera controller initialized successfully');
+
+      if (mounted) {
+        setState(() {
+          _isInitialized = true;
+        });
+        print('Camera state updated, isInitialized: $_isInitialized');
+      }
+
+      print('Camera initialization completed successfully');
+    } catch (e) {
+      print('Error initializing camera: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error initializing camera: $e')),
+        );
+      }
     }
   }
 
@@ -163,6 +257,16 @@ class _DashcamScreenState extends State<DashcamScreen>
     if (_isRecording) {
       await _stopRecording();
     } else {
+      // Check if camera is ready before starting recording
+      if (!_cameraController.value.isInitialized) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Camera is not ready. Please wait...')),
+        );
+        return;
+      }
+
+      // Check permissions before starting recording
+      print('Checking permissions before starting recording...');
       await _startRecording();
     }
   }
@@ -170,14 +274,66 @@ class _DashcamScreenState extends State<DashcamScreen>
   Future<void> _startRecording() async {
     if (!_cameraController.value.isInitialized) return;
 
-    // Ensure storage permission is granted
-    final storageStatus = await Permission.storage.request();
-    if (!storageStatus.isGranted) {
+    // Check storage permissions based on Android version
+    bool hasStoragePermission = false;
+
+    if (Platform.isAndroid) {
+      // For Android 13+, check granular media permissions
+      final photosStatus = await Permission.photos.status;
+      final videosStatus = await Permission.videos.status;
+      final audioStatus = await Permission.audio.status;
+
+      print(
+          'Storage permission status - Photos: $photosStatus, Videos: $videosStatus, Audio: $audioStatus');
+
+      hasStoragePermission = photosStatus.isGranted &&
+          videosStatus.isGranted &&
+          audioStatus.isGranted;
+
+      if (!hasStoragePermission) {
+        print('Requesting storage permissions...');
+        // Request the permissions
+        final photosResult = await Permission.photos.request();
+        final videosResult = await Permission.videos.request();
+        final audioResult = await Permission.audio.request();
+
+        print(
+            'Permission request results - Photos: $photosResult, Videos: $videosResult, Audio: $audioResult');
+
+        hasStoragePermission = photosResult.isGranted &&
+            videosResult.isGranted &&
+            audioResult.isGranted;
+      }
+    } else {
+      // For iOS, use storage permission
+      final storageStatus = await Permission.storage.status;
+      hasStoragePermission = storageStatus.isGranted;
+
+      if (!hasStoragePermission) {
+        final result = await Permission.storage.request();
+        hasStoragePermission = result.isGranted;
+      }
+    }
+
+    print('Final storage permission status: $hasStoragePermission');
+
+    if (!hasStoragePermission) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('Storage permission is required to save videos')),
+            content: Text(
+                'Storage permission is required to save videos. Please grant Photos & Videos and Audio permissions in Settings.')),
       );
       return;
+    }
+
+    // Initialize background service before starting recording
+    try {
+      await _backgroundService.initialize(
+        maxRecordingDurationMinutes: _getDurationInMinutes(),
+      );
+      print('Background service initialized before recording');
+    } catch (e) {
+      print('Error initializing background service: $e');
     }
 
     // Create a timestamped file path for the video
@@ -186,12 +342,6 @@ class _DashcamScreenState extends State<DashcamScreen>
     final path = '${directory.path}/dashcam_$timestamp.mp4';
 
     try {
-      // Initialize background service with current camera settings
-      await DashcamBackgroundService().initialize(
-        cameraController: _cameraController,
-        maxRecordingDurationMinutes: _getDurationInMinutes(),
-      );
-
       // Start recording with camera controller
       await _cameraController.startVideoRecording();
       _currentVideoPath = path;
@@ -234,7 +384,7 @@ class _DashcamScreenState extends State<DashcamScreen>
     // Check if we're recording in foreground or background
     bool isRecordingInForeground = _cameraController.value.isInitialized &&
         _cameraController.value.isRecordingVideo;
-    bool isRecordingInBackground = DashcamBackgroundService().isRecording;
+    bool isRecordingInBackground = _backgroundService.isRecording;
 
     print(
         'Stopping recording - Foreground: $isRecordingInForeground, Background: $isRecordingInBackground');
@@ -252,12 +402,11 @@ class _DashcamScreenState extends State<DashcamScreen>
 
       // Stop background recording if active
       if (isRecordingInBackground) {
-        await DashcamBackgroundService().stopBackgroundRecording();
+        await _backgroundService.stopBackgroundRecording();
         print('Stopped background recording');
 
         // If we have a video path from background service, use it
-        String? backgroundVideoPath =
-            DashcamBackgroundService().currentVideoPath;
+        String? backgroundVideoPath = _backgroundService.currentVideoPath;
         if (backgroundVideoPath != null && videoFile == null) {
           videoFile = XFile(backgroundVideoPath);
         }
@@ -280,6 +429,14 @@ class _DashcamScreenState extends State<DashcamScreen>
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('No video file was created')),
         );
+      }
+
+      // Stop the background service completely
+      try {
+        await _backgroundService.stopService();
+        print('Background service stopped completely');
+      } catch (e) {
+        print('Error stopping background service: $e');
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -433,7 +590,7 @@ class _DashcamScreenState extends State<DashcamScreen>
           _isRecording = false;
           _isPaused = false;
         });
-        DashcamBackgroundService().stopBackgroundRecording();
+        _backgroundService.stopBackgroundRecording();
       } catch (e) {
         // Handle error
         ScaffoldMessenger.of(context).showSnackBar(
@@ -468,6 +625,9 @@ class _DashcamScreenState extends State<DashcamScreen>
 
   @override
   Widget build(BuildContext context) {
+    print(
+        'Building DashcamScreen - isInitialized: $_isInitialized, cameraInitialized: ${_cameraController.value.isInitialized}');
+
     if (!_isInitialized) {
       return const Scaffold(
         body: Center(child: CircularProgressIndicator()),
@@ -498,7 +658,24 @@ class _DashcamScreenState extends State<DashcamScreen>
               aspectRatio: 1.0, // Square aspect ratio
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(8.0),
-                child: CameraPreview(_cameraController),
+                child: _isInitialized && _cameraController.value.isInitialized
+                    ? CameraPreview(_cameraController)
+                    : Container(
+                        color: Colors.black,
+                        child: const Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              CircularProgressIndicator(color: Colors.white),
+                              SizedBox(height: 16),
+                              Text(
+                                'Initializing Camera...',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
               ),
             ),
           ),
