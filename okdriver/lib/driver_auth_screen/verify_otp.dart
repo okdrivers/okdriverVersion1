@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:okdriver/bottom_navigation_bar/bottom_navigation_bar.dart';
 import 'package:okdriver/driver_auth_screen/driver_registration_screen.dart';
 import 'package:okdriver/theme/theme_provider.dart';
+import 'package:okdriver/service/usersession_service.dart';
 import 'package:provider/provider.dart';
 import 'dart:convert';
 import 'dart:async';
@@ -62,6 +63,7 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen>
     _initializeAnimations();
     _setupListeners();
     _startResendTimer();
+    _checkExistingSession();
 
     // Initialize _isDarkMode from ThemeProvider
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -70,6 +72,34 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen>
         _isDarkMode = themeProvider.isDarkTheme;
       });
     });
+  }
+
+  // Check if user is already logged in
+  void _checkExistingSession() {
+    if (UserSessionService.instance.isLoggedIn) {
+      // User is already logged in, navigate to appropriate screen
+      final user = UserSessionService.instance.currentUser;
+      final bool isNewUser = user?['isNewUser'] ?? false;
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (isNewUser) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DriverRegistrationScreen(
+                phoneNumber: widget.phoneNumber,
+                userId: user?['id']?.toString() ?? '',
+              ),
+            ),
+          );
+        } else {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => BottomNavScreen()),
+          );
+        }
+      });
+    }
   }
 
   void _initializeAnimations() {
@@ -210,7 +240,7 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen>
     });
   }
 
-  // API call to verify OTP
+  // API call to verify OTP with UserSession integration
   Future<void> _verifyOTP() async {
     final otpCode = _getOTPCode();
 
@@ -233,7 +263,7 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen>
       await Future.delayed(const Duration(milliseconds: 1500));
 
       final response = await http.post(
-        Uri.parse('http://192.168.1.39:5000/api/driver/verify-otp'),
+        Uri.parse('http://192.168.0.101:5000/api/driver/verify-otp'),
         headers: {
           'Content-Type': 'application/json',
         },
@@ -331,7 +361,7 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen>
 
     try {
       final response = await http.post(
-        Uri.parse('http://localhost:5000/api/driver/send-otp'),
+        Uri.parse('http://192.168.0.101:5000/api/driver/send-otp'),
         headers: {
           'Content-Type': 'application/json',
         },
@@ -353,6 +383,7 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen>
         );
       }
     } catch (e) {
+      print('Resend OTP error: $e');
       _showMessage('Network error. Please try again.', isError: true);
     } finally {
       setState(() {

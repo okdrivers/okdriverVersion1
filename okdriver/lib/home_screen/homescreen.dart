@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:okdriver/service/usersession_service.dart';
 import 'package:okdriver/dashcam/components/camera_selection.dart';
 import 'package:okdriver/dashcam/dashcam_screen.dart';
-import 'package:okdriver/okdriver_virtual_assistant/okdriver_virtual_assistant_screen.dart';
+import 'package:okdriver/okdriver_virtual_assistant/index.dart';
 
 import 'package:okdriver/permissionscreen/permissionscreen.dart' as permission;
 import 'package:provider/provider.dart';
@@ -17,6 +18,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late bool _isDarkMode; // Will be initialized from ThemeProvider
+  String _driverName = "Driver"; // Default name until API data is loaded
+  bool _isLoading = true;
 
   @override
   void initState() {
@@ -27,7 +30,37 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _isDarkMode = themeProvider.isDarkTheme;
       });
+
+      // Load driver data from session
+      _loadDriverData();
     });
+  }
+
+  // Load driver data from session service
+  Future<void> _loadDriverData() async {
+    final sessionService = UserSessionService.instance;
+
+    // Get user data from session
+    final userData = sessionService.currentUser;
+    if (userData != null) {
+      setState(() {
+        _driverName = sessionService.getUserDisplayName();
+        _isLoading = false;
+      });
+    } else {
+      // Try to fetch fresh data from API
+      final freshData = await sessionService.fetchCurrentUserData();
+      if (freshData != null) {
+        setState(() {
+          _driverName = sessionService.getUserDisplayName();
+          _isLoading = false;
+        });
+      } else {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   void _toggleTheme() {
@@ -160,7 +193,7 @@ class _HomeScreenState extends State<HomeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Hello Bro!',
+                  _isLoading ? 'Hello!' : 'Hello ${_driverName}!',
                   style: TextStyle(
                     color: _isDarkMode ? Colors.white : Colors.black87,
                     fontSize: 18,
@@ -295,14 +328,12 @@ class _HomeScreenState extends State<HomeScreen> {
         gradient: const LinearGradient(
           colors: [Color(0xFF9C27B0), Color(0xFF7B1FA2)],
         ),
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => OkDriverVirtualAssistantScreen(),
-            ),
-          );
-        },
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const OkDriverVirtualAssistantScreen(),
+          ),
+        ),
       ),
     );
   }

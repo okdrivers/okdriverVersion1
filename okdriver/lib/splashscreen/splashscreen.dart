@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:okdriver/permissionscreen/permissionscreen.dart';
+import 'package:okdriver/service/usersession_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({Key? key}) : super(key: key);
@@ -27,10 +28,21 @@ class _SplashScreenState extends State<SplashScreen> {
         overlays: SystemUiOverlay.values);
 
     if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const PermissionScreen()),
-      );
+      final sessionService = UserSessionService.instance;
+
+      if (sessionService.isLoggedIn) {
+        // User is logged in, go to main app
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const PermissionScreen()),
+        );
+      } else {
+        // User is not logged in, go to permission screen (which leads to login)
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const PermissionScreen()),
+        );
+      }
     }
   }
 

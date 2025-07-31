@@ -1,5 +1,6 @@
 // Main Profile Screen
 import 'package:flutter/material.dart';
+import 'package:okdriver/service/usersession_service.dart';
 import 'package:okdriver/driver_profile_screen/components/about_okdriver.dart';
 import 'package:okdriver/driver_profile_screen/components/language_switch.dart';
 import 'package:okdriver/driver_profile_screen/components/subscription_plan.dart';
@@ -16,6 +17,9 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   late bool _isDarkMode;
+  String _userName = "John Driver";
+  String _userEmail = "john.driver@email.com";
+  String _userPlan = "Free Plan";
 
   @override
   void initState() {
@@ -26,6 +30,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() {
         _isDarkMode = themeProvider.isDarkTheme;
       });
+
+      // Load user data from session
+      _loadUserData();
+    });
+  }
+
+  // Load user data from session service
+  void _loadUserData() {
+    final sessionService = UserSessionService.instance;
+    setState(() {
+      _userName = sessionService.getUserDisplayName();
+      _userEmail = sessionService.getUserEmail();
+      _userPlan =
+          sessionService.hasPremiumPlan() ? "Premium Plan" : "Free Plan";
     });
   }
 
@@ -234,7 +252,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'John Driver',
+                      _userName,
                       style: TextStyle(
                         color: _isDarkMode ? Colors.white : Colors.black87,
                         fontSize: 20,
@@ -243,7 +261,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'john.driver@email.com',
+                      _userEmail,
                       style: TextStyle(
                         color: _isDarkMode
                             ? Colors.white.withOpacity(0.7)
@@ -260,9 +278,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         color: const Color(0xFF4CAF50).withOpacity(0.1),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: const Text(
-                        'Free Plan',
-                        style: TextStyle(
+                      child: Text(
+                        _userPlan,
+                        style: const TextStyle(
                           color: Color(0xFF4CAF50),
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
@@ -535,9 +553,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                   TextButton(
-                    onPressed: () {
+                    onPressed: () async {
                       Navigator.pop(context);
-                      // Implement logout logic
+                      // Use session service to logout
+                      try {
+                        await UserSessionService.instance.logout();
+
+                        // Navigate to login screen
+                        Navigator.of(context).pushNamedAndRemoveUntil(
+                            '/login', (route) => false);
+                      } catch (e) {
+                        // Show error
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Logout error: $e')),
+                        );
+                      }
                     },
                     child: const Text(
                       'Logout',

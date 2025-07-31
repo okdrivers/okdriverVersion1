@@ -204,7 +204,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       context,
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) =>
-            BottomNavScreen(),
+            SendOtpScreen(),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return SlideTransition(
             position: animation.drive(

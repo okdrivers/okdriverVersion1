@@ -1,7 +1,6 @@
 // This is a barrel file to make it easier to import the voice assistant module
 
 import 'package:flutter/material.dart';
-import 'package:okdriver/okdriver_virtual_assistant/okdriver_virtual_assistant_screen.dart';
 
 export 'index.dart';
 
@@ -13,6 +12,6 @@ class OkDriverVirtualAssistant extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const OkDriverVirtualAssistantScreen();
+    return const OkDriverVirtualAssistant();
   }
 }

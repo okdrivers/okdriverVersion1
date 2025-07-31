@@ -162,7 +162,7 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen>
       await Future.delayed(const Duration(milliseconds: 1500));
 
       final response = await http.post(
-        Uri.parse('http://192.168.1.36:5000/api/drivers/register'),
+        Uri.parse('http://192.168.0.101:5000/api/drivers/register'),
         headers: {
           'Content-Type': 'application/json',
         },

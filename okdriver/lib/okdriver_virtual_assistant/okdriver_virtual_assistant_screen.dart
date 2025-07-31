@@ -31,6 +31,16 @@ class _OkDriverVirtualAssistantScreenState
   late bool _isDarkMode;
   final String _userId = 'default'; // Could be replaced with actual user ID
 
+  // Model and speaker selection
+  Map<String, dynamic> _availableModels = {};
+  Map<String, dynamic> _availableSpeakers = {};
+  String _selectedModelProvider = 'together';
+  String _selectedModelName = '';
+  String _selectedSpeakerId =
+      'varun_chat'; // Default speaker, can also be 'keerti_joy'
+  bool _enablePremium = false;
+  bool _isLoadingConfig = true;
+
   @override
   void initState() {
     super.initState();
@@ -44,6 +54,12 @@ class _OkDriverVirtualAssistantScreenState
         _isDarkMode = themeProvider.isDarkTheme;
       });
 
+      // Load available models and speakers
+      _loadConfig();
+
+      // Load user settings
+      _loadUserSettings();
+
       // Load conversation history
       _loadHistory();
     });
@@ -53,6 +69,7 @@ class _OkDriverVirtualAssistantScreenState
   void dispose() {
     _flutterTts.stop();
     _scrollController.dispose();
+    _assistantService.dispose(); // Dispose audio player resources
     super.dispose();
   }
 
@@ -125,6 +142,73 @@ class _OkDriverVirtualAssistantScreenState
     }
   }
 
+  // Load available models and speakers from backend
+  void _loadConfig() async {
+    try {
+      setState(() {
+        _isLoadingConfig = true;
+      });
+
+      final config = await _assistantService.getAvailableConfig();
+
+      setState(() {
+        _availableModels = config['available_models'] ?? {};
+        _availableSpeakers = config['available_speakers'] ?? {};
+        _isLoadingConfig = false;
+
+        // Set default model if not already set
+        if (_selectedModelName.isEmpty && _availableModels.isNotEmpty) {
+          final models = _availableModels[_selectedModelProvider] ?? {};
+          if (models.isNotEmpty) {
+            _selectedModelName = models.keys.first;
+          }
+        }
+
+        // Set default speaker if not already set
+        if (_selectedSpeakerId.isEmpty && _availableSpeakers.isNotEmpty) {
+          _selectedSpeakerId = _availableSpeakers.keys.first;
+        }
+      });
+    } catch (e) {
+      setState(() {
+        _isLoadingConfig = false;
+      });
+      print('Error loading config: $e');
+    }
+  }
+
+  // Load user settings from backend
+  void _loadUserSettings() async {
+    try {
+      final settings = await _assistantService.getUserSettings(_userId);
+
+      setState(() {
+        _selectedModelProvider = settings['modelProvider'] ?? 'together';
+        _selectedModelName = settings['modelName'] ?? '';
+        _selectedSpeakerId = settings['speakerId'] ??
+            'varun_chat'; // Can also default to 'keerti_joy'
+        _enablePremium = settings['enablePremium'] ?? false;
+      });
+    } catch (e) {
+      print('Error loading user settings: $e');
+    }
+  }
+
+  // Save user settings to backend
+  void _saveUserSettings() async {
+    try {
+      await _assistantService.saveUserSettings(
+        _userId,
+        modelProvider: _selectedModelProvider,
+        modelName: _selectedModelName,
+        speakerId: _selectedSpeakerId,
+        enablePremium: _enablePremium,
+      );
+    } catch (e) {
+      print('Error saving user settings: $e');
+    }
+  }
+
   // Send message to backend API
   void _sendMessageToBackend(String message) async {
     if (message.isEmpty) return;
@@ -140,7 +224,14 @@ class _OkDriverVirtualAssistantScreenState
     _scrollToBottom();
 
     try {
-      final data = await _assistantService.sendMessage(message, _userId);
+      final data = await _assistantService.sendMessage(
+        message,
+        _userId,
+        modelProvider: _selectedModelProvider,
+        modelName: _selectedModelName,
+        speakerId: _selectedSpeakerId,
+        enablePremium: _enablePremium,
+      );
       final aiResponse = data['response'];
       final audioId = data['audio_id'];
 
@@ -151,14 +242,17 @@ class _OkDriverVirtualAssistantScreenState
         _isLoading = false;
       });
 
-      // Speak the response
-      await _flutterTts.speak(aiResponse);
-
       // Scroll to bottom after adding AI response
       _scrollToBottom();
 
-      // Check for audio URL
-      _checkAudioStatus(audioId);
+      // Check for audio URL and play when available
+      // If Maya AI audio is not available, fall back to Flutter TTS
+      if (audioId != null && audioId.isNotEmpty) {
+        _checkAudioStatus(audioId);
+      } else {
+        // Fallback to Flutter TTS if no audio ID is provided
+        await _flutterTts.speak(aiResponse);
+      }
     } catch (e) {
       setState(() {
         _messages.add(ChatMessage(
@@ -175,11 +269,25 @@ class _OkDriverVirtualAssistantScreenState
     try {
       final data = await _assistantService.checkAudioStatus(audioId);
       if (data['status'] == 'completed' && data['audio_url'] != null) {
-        // Audio is ready, you can use it if needed
-        // For now we're using flutter_tts directly
+        // Audio is ready, play it using the audio player
+        final audioUrl = data['audio_url'];
+        print('Audio URL received: $audioUrl');
+        await _assistantService.playAudio(audioUrl);
+      } else if (data['status'] == 'pending') {
+        // If audio is still pending, check again after a delay
+        print('Audio still pending, checking again in 2 seconds');
+        Future.delayed(const Duration(seconds: 2), () {
+          _checkAudioStatus(audioId);
+        });
       }
     } catch (e) {
       // Handle error silently
+      print('Error checking audio status: $e');
+      // Fallback to Flutter TTS if there's an error with Maya AI audio
+      final lastMessage = _messages.isNotEmpty ? _messages.last : null;
+      if (lastMessage != null && !lastMessage.isUser) {
+        await _flutterTts.speak(lastMessage.text);
+      }
     }
   }
 
@@ -206,6 +314,34 @@ class _OkDriverVirtualAssistantScreenState
     }
   }
 
+  // Play latest audio file from backend
+  void _playLatestAudio() async {
+    try {
+      setState(() {
+        _isLoading = true;
+      });
+
+      await _assistantService.playLatestAudio();
+
+      setState(() {
+        _isLoading = false;
+      });
+    } catch (e) {
+      print('Error playing latest audio: $e');
+      setState(() {
+        _isLoading = false;
+      });
+
+      // Show a snackbar with the error
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to play latest audio'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Listen to theme changes
@@ -219,6 +355,18 @@ class _OkDriverVirtualAssistantScreenState
         foregroundColor: _isDarkMode ? Colors.white : Colors.black87,
         elevation: 0,
         actions: [
+          // Settings button
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: _showSettingsDialog,
+            tooltip: 'Settings',
+          ),
+          // Play latest audio button
+          IconButton(
+            icon: const Icon(Icons.volume_up),
+            onPressed: _playLatestAudio,
+            tooltip: 'Play latest audio',
+          ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
             onPressed: _messages.isNotEmpty ? _clearHistory : null,
@@ -299,6 +447,7 @@ class _OkDriverVirtualAssistantScreenState
                   glowColor: const Color(0xFF9C27B0),
                   glowRadiusFactor: 60.0,
                   duration: const Duration(milliseconds: 2000),
+                  // repeatPauseDuration: const Duration(milliseconds: 100),
                   repeat: true,
                   child: GestureDetector(
                     onTap: _listen,
@@ -379,6 +528,213 @@ class _OkDriverVirtualAssistantScreenState
           isUser: _messages[index].isUser,
         );
       },
+    );
+  }
+
+  // Show settings dialog
+  void _showSettingsDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) {
+          return AlertDialog(
+            title: const Text('Assistant Settings'),
+            content: _isLoadingConfig
+                ? const Center(child: CircularProgressIndicator())
+                : SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Premium toggle
+                        SwitchListTile(
+                          title: const Text('Enable Premium'),
+                          subtitle: const Text('Access premium models'),
+                          value: _enablePremium,
+                          onChanged: (value) {
+                            setState(() {
+                              _enablePremium = value;
+
+                              // If premium is disabled, switch to together provider
+                              if (!_enablePremium &&
+                                  _selectedModelProvider == 'openai') {
+                                _selectedModelProvider = 'together';
+
+                                // Select first non-premium model
+                                final models =
+                                    _availableModels['together'] ?? {};
+                                if (models.isNotEmpty) {
+                                  for (var entry in models.entries) {
+                                    if (!entry.key.contains('70B') &&
+                                        !entry.key.contains('Premium')) {
+                                      _selectedModelName = entry.key;
+                                      break;
+                                    }
+                                  }
+                                }
+                              }
+                            });
+                          },
+                        ),
+
+                        const Divider(),
+
+                        // Model provider selection
+                        const Text('Model Provider',
+                            style: TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<String>(
+                          value: _selectedModelProvider,
+                          decoration: const InputDecoration(
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                          ),
+                          items: _availableModels.keys
+                              .map((provider) {
+                                // Only show OpenAI if premium is enabled
+                                if (provider == 'openai' && !_enablePremium) {
+                                  return null;
+                                }
+                                return DropdownMenuItem<String>(
+                                  value: provider,
+                                  child: Text(provider == 'together'
+                                      ? 'Together AI'
+                                      : 'OpenAI'),
+                                );
+                              })
+                              .where((item) => item != null)
+                              .cast<DropdownMenuItem<String>>()
+                              .toList(),
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() {
+                                _selectedModelProvider = value;
+
+                                // Reset model selection
+                                final models = _availableModels[value] ?? {};
+                                if (models.isNotEmpty) {
+                                  // Select first model that matches premium status
+                                  for (var entry in models.entries) {
+                                    final isPremiumModel =
+                                        entry.key.contains('70B') ||
+                                            entry.key.contains('Premium') ||
+                                            entry.key.contains('gpt-4');
+
+                                    if (_enablePremium || !isPremiumModel) {
+                                      _selectedModelName = entry.key;
+                                      break;
+                                    }
+                                  }
+                                }
+                              });
+                            }
+                          },
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // Model selection
+                        const Text('AI Model',
+                            style: TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<String>(
+                          value: _selectedModelName.isNotEmpty
+                              ? _selectedModelName
+                              : null,
+                          decoration: const InputDecoration(
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                          ),
+                          items:
+                              (_availableModels[_selectedModelProvider] ?? {})
+                                  .entries
+                                  .map((entry) {
+                                    final isPremiumModel =
+                                        entry.key.contains('70B') ||
+                                            entry.key.contains('Premium') ||
+                                            entry.key.contains('gpt-4');
+
+                                    // Only show premium models if premium is enabled
+                                    if (isPremiumModel && !_enablePremium) {
+                                      return null;
+                                    }
+
+                                    return DropdownMenuItem<String>(
+                                      value: entry.key,
+                                      child: Text(entry.value),
+                                    );
+                                  })
+                                  .where((item) => item != null)
+                                  .cast<DropdownMenuItem<String>>()
+                                  .toList(),
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() {
+                                _selectedModelName = value;
+                              });
+                            }
+                          },
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // Speaker selection
+                        const Text('Voice',
+                            style: TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<String>(
+                          value: _selectedSpeakerId.isNotEmpty
+                              ? _selectedSpeakerId
+                              : null,
+                          decoration: const InputDecoration(
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                          ),
+                          items: _availableSpeakers.entries.map((entry) {
+                            return DropdownMenuItem<String>(
+                              value: entry.key,
+                              child: Text(entry.value),
+                            );
+                          }).toList(),
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() {
+                                _selectedSpeakerId = value;
+                              });
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                },
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  // Save settings
+                  _saveUserSettings();
+
+                  // Update state in parent widget
+                  this.setState(() {
+                    // Update state variables
+                  });
+
+                  Navigator.of(context).pop();
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 }

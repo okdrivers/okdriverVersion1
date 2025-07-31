@@ -8,9 +8,16 @@ import 'package:okdriver/splashscreen/splashscreen.dart';
 import 'package:okdriver/theme/theme_provider.dart';
 import 'package:okdriver/language/language_provider.dart';
 import 'package:okdriver/language/app_localizations.dart';
+import 'package:okdriver/service/usersession_service.dart';
 import 'package:provider/provider.dart';
+import 'package:okdriver/bottom_navigation_bar/bottom_navigation_bar.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize session service
+  await UserSessionService.instance.initialize();
+
   runApp(
     MultiProvider(
       providers: [
@@ -43,7 +50,17 @@ class MyApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      home: SplashScreen(),
+      home: _getInitialScreen(),
     );
+  }
+
+  // Determine initial screen based on login status
+  Widget _getInitialScreen() {
+    final sessionService = UserSessionService.instance;
+    if (sessionService.isLoggedIn) {
+      return BottomNavScreen();
+    } else {
+      return const SplashScreen();
+    }
   }
 }

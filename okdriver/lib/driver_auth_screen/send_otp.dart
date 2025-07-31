@@ -147,7 +147,7 @@ class _SendOtpScreenState extends State<SendOtpScreen>
       // Simulate API delay for better UX
       await Future.delayed(const Duration(milliseconds: 1500));
 
-      final url = Uri.parse('http://192.168.1.39:5000/api/driver/send-otp');
+      final url = Uri.parse('http://192.168.0.101:5000/api/driver/send-otp');
       final response = await http.post(
         url,
         headers: {"Content-Type": "application/json"},
